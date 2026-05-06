@@ -1,12 +1,12 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QPushButton, QLabel, QSplitter, QStatusBar, QFrame,
+    QPushButton, QLabel, QStatusBar, QFrame,
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QColor, QPainter, QBrush, QLinearGradient, QPixmap, QPen
 
 from app.ui.theme import (
-    C_WINDOW_BG, C_PANEL_BG, C_RAISED_PANEL, C_ACCENT, C_EXPORT,
+    C_WINDOW_BG, C_PANEL_BG, C_RAISED_PANEL, C_ACCENT,
     C_BORDER, C_BORDER_SOFT, C_TEXT_MAIN, C_TEXT_SECONDARY, C_TEXT_MUTED,
 )
 from app.ui.layer_panel import LayerPanel
@@ -16,69 +16,93 @@ from app.ui.timeline import TimelineStrip
 
 
 def _vline() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.VLine)
-    line.setFrameShadow(QFrame.Plain)
-    line.setStyleSheet(f"background: {C_BORDER_SOFT}; max-width: 1px; border: none;")
-    return line
+    f = QFrame()
+    f.setFrameShape(QFrame.VLine)
+    f.setStyleSheet(f"background: {C_BORDER_SOFT}; max-width: 1px; border: none;")
+    return f
+
+
+class LogoWidget(QWidget):
+    """Small "P" logo mark."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(28, 28)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        grad = QLinearGradient(0, 0, 28, 28)
+        grad.setColorAt(0, QColor(C_ACCENT))
+        grad.setColorAt(1, QColor("#1A8A80"))
+        p.setBrush(QBrush(grad))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(0, 0, 28, 28, 6, 6)
+        f = QFont("Inter, SF Pro Display, system-ui")
+        f.setPointSize(14)
+        f.setWeight(QFont.Weight.Bold)
+        p.setFont(f)
+        p.setPen(QColor("#0B1014"))
+        p.drawText(0, 0, 28, 28, Qt.AlignCenter, "P")
 
 
 class TopBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(44)
+        self.setFixedHeight(48)
         self.setStyleSheet(
             f"background: {C_PANEL_BG}; border-bottom: 1px solid {C_BORDER_SOFT};"
         )
         self._build()
 
     def _build(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 14, 0)
-        layout.setSpacing(0)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 0, 14, 0)
+        row.setSpacing(0)
 
-        # App name — left
+        row.addWidget(LogoWidget())
+        row.addSpacing(10)
+
         app_name = QLabel("Parallax Studio")
         app_name.setStyleSheet(
-            f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 600; letter-spacing: 0.3px;"
+            f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 600;"
         )
-        layout.addWidget(app_name)
+        row.addWidget(app_name)
 
-        layout.addSpacing(24)
+        row.addSpacing(28)
 
-        # New / Open / Save — center-left
-        for label, tip in [("New", "New project"), ("Open", "Open project"), ("Save", "Save project")]:
-            btn = QPushButton(label)
+        for icon, label, tip in [
+            ("☐", "New",  "New project"),
+            ("↗", "Open", "Open project"),
+            ("↓", "Save", "Save project"),
+        ]:
+            btn = QPushButton(f"  {label}")
             btn.setToolTip(tip)
-            btn.setFixedHeight(28)
-            btn.setFixedWidth(52)
+            btn.setFixedHeight(30)
+            btn.setFixedWidth(72)
             btn.setStyleSheet(
                 f"QPushButton {{ background: {C_RAISED_PANEL}; border: 1px solid {C_BORDER}; "
-                f"color: {C_TEXT_SECONDARY}; border-radius: 5px; font-size: 12px; }}"
-                f"QPushButton:hover {{ border-color: {C_ACCENT}; color: {C_ACCENT}; }}"
+                f"color: {C_TEXT_SECONDARY}; border-radius: 6px; font-size: 12px; }}"
+                f"QPushButton:hover {{ border-color: {C_ACCENT}55; color: {C_TEXT_MAIN}; }}"
             )
-            layout.addWidget(btn)
-            layout.addSpacing(4)
+            row.addWidget(btn)
+            row.addSpacing(6)
 
-        layout.addStretch()
+        row.addStretch()
 
-        # Preview FPS pill — center-right
-        fps_lbl = QLabel("Preview  24 fps")
-        fps_lbl.setStyleSheet(
-            f"background: {C_RAISED_PANEL}; border: 1px solid {C_BORDER_SOFT}; "
-            f"border-radius: 5px; color: {C_ACCENT}; font-size: 11px; "
-            f"font-family: 'JetBrains Mono', 'SF Mono', monospace; padding: 3px 10px;"
+        preview_lbl = QLabel("▶  Preview 24fps")
+        preview_lbl.setStyleSheet(
+            f"color: {C_TEXT_SECONDARY}; font-size: 12px; "
+            f"font-family: 'JetBrains Mono', 'SF Mono', monospace;"
         )
-        layout.addWidget(fps_lbl)
+        row.addWidget(preview_lbl)
 
-        layout.addSpacing(10)
+        row.addSpacing(16)
 
-        # Export button — right, amber
-        export_btn = QPushButton("Export MP4")
+        export_btn = QPushButton("  Export MP4")
         export_btn.setObjectName("exportBtn")
-        export_btn.setFixedHeight(30)
-        export_btn.setFixedWidth(96)
-        layout.addWidget(export_btn)
+        export_btn.setFixedHeight(32)
+        export_btn.setFixedWidth(108)
+        row.addWidget(export_btn)
 
 
 class MainWindow(QMainWindow):
@@ -86,7 +110,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Parallax Studio")
         self.setMinimumSize(1280, 820)
-        self.resize(1400, 880)
+        self.resize(1400, 900)
         self._build()
 
     def _build(self):
@@ -98,33 +122,21 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Top command bar
-        top_bar = TopBar()
-        root.addWidget(top_bar)
+        root.addWidget(TopBar())
 
-        # Main body: layer panel | canvas | controls
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        layer_panel = LayerPanel()
-        body.addWidget(layer_panel)
+        body.addWidget(LayerPanel())
         body.addWidget(_vline())
-
-        canvas_panel = CanvasPanel()
-        body.addWidget(canvas_panel, stretch=1)
-
+        body.addWidget(CanvasPanel(), stretch=1)
         body.addWidget(_vline())
-        controls_panel = ControlsPanel()
-        body.addWidget(controls_panel)
+        body.addWidget(ControlsPanel())
 
         root.addLayout(body, stretch=1)
+        root.addWidget(TimelineStrip())
 
-        # Bottom timeline strip
-        timeline = TimelineStrip()
-        root.addWidget(timeline)
-
-        # Status bar
         status = QStatusBar()
         status.setFixedHeight(22)
         status.showMessage("Ready  ·  No project loaded")
