@@ -30,16 +30,16 @@ New direction:
 Phase 1 is blocked until this gate is passed.
 
 - [ ] [EMRE] Save the generated concept image as `~/AI/scratch/parallax-studio/concept.png`
-- [ ] [CLAUDE CODE] Create project folder structure from `PROJECT.md`
-- [ ] [CLAUDE CODE] Create minimal runnable PySide6/PyQt6 app shell
-- [ ] [CLAUDE CODE] Implement `theme.py` with the binding Darkroom Motion Studio palette
-- [ ] [CLAUDE CODE] Implement `main_window.py` with five-zone layout: top bar, left layers, center preview, right controls, bottom loop strip
-- [ ] [CLAUDE CODE] Implement `layer_panel.py` with hardcoded dummy layer cards: Foreground, Character, Background
-- [ ] [CLAUDE CODE] Implement selected layer styling with cyan border/glow, not native Qt blue selection
-- [ ] [CLAUDE CODE] Implement `canvas.py` visual shell: dark stage, checkerboard area, preview frame, floating status pills
-- [ ] [CLAUDE CODE] Implement `controls.py` visual shell: Depth Brush and Motion cards, sliders, dropdowns, buttons
-- [ ] [CLAUDE CODE] Implement `timeline.py` visual shell: play/pause, duration, scrub marker, speed slider, Bounce/Seamless toggles
-- [ ] [CLAUDE CODE] Add placeholder artwork/gradient blocks only if no sample images exist; do not block shell on real assets
+- [x] [CLAUDE CODE] Create project folder structure from `PROJECT.md`
+- [x] [CLAUDE CODE] Create minimal runnable PySide6/PyQt6 app shell
+- [x] [CLAUDE CODE] Implement `theme.py` with the binding Darkroom Motion Studio palette
+- [x] [CLAUDE CODE] Implement `main_window.py` with five-zone layout: top bar, left layers, center preview, right controls, bottom loop strip
+- [x] [CLAUDE CODE] Implement `layer_panel.py` with hardcoded dummy layer cards: Foreground, Character, Background
+- [x] [CLAUDE CODE] Implement selected layer styling with cyan border/glow, not native Qt blue selection
+- [x] [CLAUDE CODE] Implement `canvas.py` visual shell: dark stage, checkerboard area, preview frame, floating status pills
+- [x] [CLAUDE CODE] Implement `controls.py` visual shell: Depth Brush and Motion cards, sliders, dropdowns, buttons
+- [x] [CLAUDE CODE] Implement `timeline.py` visual shell: play/pause, duration, scrub marker, speed slider, Bounce/Seamless toggles
+- [x] [CLAUDE CODE] Add placeholder artwork/gradient blocks only if no sample images exist; do not block shell on real assets
 - [ ] [EMRE] Run app locally on MacBook Neo
 - [ ] [EMRE] Screenshot app shell and compare against concept
 - [ ] [EMRE] Approve Phase 0 or request visual fixes
