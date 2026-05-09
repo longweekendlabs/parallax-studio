@@ -1,0 +1,2 @@
+# Dev / build tools — not needed to run the app, only to package it
+pyinstaller>=6.0

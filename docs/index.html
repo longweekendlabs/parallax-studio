@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parallax Studio</title>
+    <meta
+      name="description"
+      content="Parallax Studio turns layered artwork into looping 2.5D parallax animations on macOS Apple Silicon."
+    />
+    <meta name="theme-color" content="#091015" />
+    <meta property="og:title" content="Parallax Studio" />
+    <meta
+      property="og:description"
+      content="Import layers, paint depth, preview motion live, and export MP4 or GIF loops."
+    />
+    <meta property="og:image" content="assets/parallax-studio-ui.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">Long Weekend Labs</div>
+          <h1>Parallax Studio</h1>
+          <p class="lede">
+            A local macOS tool for importing layered art, painting depth, and turning still images
+            into clean looping parallax motion.
+          </p>
+          <div class="actions">
+            <a class="button button-primary" href="https://github.com/longweekendlabs/parallax-studio">
+              View source
+            </a>
+            <a class="button button-secondary" href="https://github.com/longweekendlabs/parallax-studio/blob/main/README.md">
+              Read the README
+            </a>
+          </div>
+          <dl class="facts">
+            <div>
+              <dt>Target</dt>
+              <dd>macOS Apple Silicon</dd>
+            </div>
+            <div>
+              <dt>Workflow</dt>
+              <dd>Import, paint, preview, export</dd>
+            </div>
+            <div>
+              <dt>Project file</dt>
+              <dd><code>.parlx</code></dd>
+            </div>
+          </dl>
+        </div>
+
+        <figure class="hero-shot">
+          <img src="assets/parallax-studio-ui.png" alt="Parallax Studio app window" />
+        </figure>
+      </section>
+
+      <section class="band">
+        <div class="section-head">
+          <p class="eyebrow">What it does</p>
+          <h2>One focused workflow instead of a giant editing suite.</h2>
+        </div>
+        <div class="columns">
+          <div>
+            <h3>Layer stack</h3>
+            <p>Import background, character, and foreground layers, then reorder, hide, duplicate, and scale them.</p>
+          </div>
+          <div>
+            <h3>Depth paint</h3>
+            <p>Brush depth directly onto the selected layer with readable overlays and undo/redo for edits and transforms.</p>
+          </div>
+          <div>
+            <h3>Motion preview</h3>
+            <p>See live parallax movement while tuning intensity, focus, and loop behavior before export.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="band band-alt">
+        <div class="section-head">
+          <p class="eyebrow">Built for</p>
+          <h2>Artists who want motion from still art without a 3D pipeline.</h2>
+        </div>
+        <div class="feature-list">
+          <div>
+            <h3>Visual novel scenes</h3>
+            <p>Layered character art and backgrounds stay editable while you tune depth for subtle motion.</p>
+          </div>
+          <div>
+            <h3>Short loops</h3>
+            <p>Export GIF or MP4 loops for previews, social posts, trailers, or in-game presentation.</p>
+          </div>
+          <div>
+            <h3>Local-first workflow</h3>
+            <p>No cloud dependency. The app stays on your Mac and references source image files directly.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="section-head">
+          <p class="eyebrow">Stack</p>
+          <h2>Python and Qt, tuned for Apple Silicon.</h2>
+        </div>
+        <div class="columns small">
+          <div>
+            <h3>UI</h3>
+            <p>PySide6</p>
+          </div>
+          <div>
+            <h3>Image processing</h3>
+            <p>NumPy and OpenCV</p>
+          </div>
+          <div>
+            <h3>Export</h3>
+            <p>imageio, ffmpeg, and Pillow</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

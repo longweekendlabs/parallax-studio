@@ -1,0 +1,252 @@
+:root {
+  color-scheme: dark;
+  --bg: #071015;
+  --bg-soft: #0c171d;
+  --panel: rgba(10, 18, 23, 0.88);
+  --text: #e6f0f5;
+  --muted: #9ab0bb;
+  --line: rgba(124, 157, 170, 0.18);
+  --teal: #3dd9c9;
+  --teal-soft: rgba(61, 217, 201, 0.14);
+  --amber: #f4b55b;
+  --shadow: 0 24px 90px rgba(0, 0, 0, 0.36);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(61, 217, 201, 0.08), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(244, 181, 91, 0.06), transparent 28%),
+    var(--bg);
+  color: var(--text);
+  font-family: Inter, "SF Pro Display", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  width: min(1280px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.hero {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(320px, 1.02fr) minmax(360px, 0.98fr);
+  gap: 40px;
+  align-items: center;
+  padding: 36px 0 48px;
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 1;
+  padding: 24px 0;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: var(--teal);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(3rem, 5vw, 5.2rem);
+  line-height: 0.94;
+  letter-spacing: -0.04em;
+}
+
+.lede {
+  max-width: 44rem;
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 1.12rem;
+  line-height: 1.7;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-weight: 700;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button-primary {
+  background: var(--teal);
+  color: #041112;
+}
+
+.button-secondary {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 32px 0 0;
+}
+
+.facts > div {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.facts dt {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.hero-shot {
+  margin: 0;
+  border-radius: 26px;
+  overflow: hidden;
+  border: 1px solid rgba(124, 157, 170, 0.2);
+  background: linear-gradient(180deg, rgba(16, 25, 30, 0.8), rgba(4, 8, 10, 0.95));
+  box-shadow: var(--shadow);
+}
+
+.hero-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.band {
+  padding: 56px 0;
+  border-top: 1px solid var(--line);
+}
+
+.band-alt {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+}
+
+.section-head {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+
+.section-head h2 {
+  max-width: 42rem;
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.7rem);
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+
+.section-head p {
+  margin: 0;
+}
+
+.columns,
+.feature-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.columns.small {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.columns > div,
+.feature-list > div {
+  padding: 18px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.columns h3,
+.feature-list h3 {
+  margin: 0 0 10px;
+  font-size: 1.08rem;
+}
+
+.columns p,
+.feature-list p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+code {
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.4rem;
+  background: rgba(61, 217, 201, 0.1);
+  border: 1px solid rgba(61, 217, 201, 0.18);
+  color: #aef7ef;
+}
+
+@media (max-width: 980px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    min-height: auto;
+    padding-top: 24px;
+  }
+
+  .facts,
+  .columns,
+  .feature-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  main {
+    width: min(100% - 24px, 1280px);
+  }
+
+  .hero {
+    padding-bottom: 32px;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .button {
+    width: 100%;
+  }
+}
