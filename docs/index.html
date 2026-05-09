@@ -27,12 +27,16 @@
             A local macOS tool for importing layered art, painting depth, and turning still images
             into clean looping parallax motion.
           </p>
+          <div class="version-badge" id="version-badge">Checking latest release...</div>
           <div class="actions">
-            <a class="button button-primary" href="https://github.com/longweekendlabs/parallax-studio">
-              View source
+            <a class="button button-primary" id="download-button" href="https://github.com/longweekendlabs/parallax-studio/releases/latest">
+              Download latest
             </a>
             <a class="button button-secondary" href="https://github.com/longweekendlabs/parallax-studio/blob/main/README.md">
               Read the README
+            </a>
+            <a class="button button-secondary" href="https://github.com/longweekendlabs/parallax-studio">
+              View source
             </a>
           </div>
           <dl class="facts">
@@ -118,6 +122,94 @@
           </div>
         </div>
       </section>
+
+      <section class="band band-alt" id="download">
+        <div class="section-head">
+          <p class="eyebrow">Download</p>
+          <h2>Get the latest local build.</h2>
+        </div>
+        <div class="download-panel">
+          <div>
+            <h3 id="release-title">Latest release</h3>
+            <p id="release-note">Fetching release details from GitHub...</p>
+          </div>
+          <div class="download-actions" id="download-actions">
+            <a class="button button-primary" href="https://github.com/longweekendlabs/parallax-studio/releases/latest">
+              View releases
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="band more-section">
+        <div class="section-head">
+          <p class="eyebrow">More from Long Weekend Labs</p>
+          <h2>Companion tools for visual art workflows.</h2>
+        </div>
+        <div class="app-grid">
+          <a class="app-card" href="https://longweekendlabs.github.io/bg-remover/">
+            <span class="app-icon">BG</span>
+            <strong>BG Remover</strong>
+            <p>AI-powered batch background removal, fully offline. Prepare clean transparent PNG layers for animation.</p>
+          </a>
+          <a class="app-card" href="https://longweekendlabs.github.io/speech-bubble-editor/">
+            <span class="app-icon">SB</span>
+            <strong>Speech Bubble Editor</strong>
+            <p>Add speech bubbles, captions, meme text, and overlays to photos and videos.</p>
+          </a>
+        </div>
+      </section>
     </main>
+
+    <script>
+      const REPO = "longweekendlabs/parallax-studio";
+      const releasesUrl = `https://github.com/${REPO}/releases/latest`;
+
+      function assetLabel(name) {
+        if (name.endsWith(".dmg")) return "Download DMG";
+        if (name.endsWith(".zip")) return "Download ZIP";
+        if (name.endsWith(".app")) return "Download app";
+        return "Download";
+      }
+
+      fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+        .then((response) => {
+          if (!response.ok) throw new Error("No release yet");
+          return response.json();
+        })
+        .then((release) => {
+          const badge = document.getElementById("version-badge");
+          const title = document.getElementById("release-title");
+          const note = document.getElementById("release-note");
+          const topButton = document.getElementById("download-button");
+          const actions = document.getElementById("download-actions");
+          const assets = release.assets || [];
+          const primary = assets.find((asset) => asset.name.endsWith(".dmg")) || assets[0];
+
+          badge.textContent = `Latest: ${release.tag_name}`;
+          title.textContent = `Latest release: ${release.tag_name}`;
+          note.textContent = release.name || "Download the newest Parallax Studio build from GitHub Releases.";
+
+          if (primary) {
+            topButton.href = primary.browser_download_url;
+            topButton.textContent = assetLabel(primary.name);
+            actions.innerHTML = "";
+            assets.forEach((asset) => {
+              const mb = Math.max(1, Math.round(asset.size / 1048576));
+              const link = document.createElement("a");
+              link.className = "button button-secondary";
+              link.href = asset.browser_download_url;
+              link.textContent = `${assetLabel(asset.name)} · ${mb} MB`;
+              actions.appendChild(link);
+            });
+          }
+        })
+        .catch(() => {
+          document.getElementById("version-badge").textContent = "Release download coming soon";
+          document.getElementById("release-title").textContent = "Build from source today";
+          document.getElementById("release-note").textContent =
+            "A packaged release is not published yet. The source is available now, and local macOS builds are produced with build_macos.sh.";
+        });
+    </script>
   </body>
 </html>
