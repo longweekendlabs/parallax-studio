@@ -64,7 +64,7 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 /* ── Sliders ── */
 QSlider::groove:horizontal {{
     height: 4px;
-    background: {C_RAISED_PANEL};
+    background: #26313A;
     border-radius: 2px;
 }}
 QSlider::sub-page:horizontal {{
@@ -72,25 +72,25 @@ QSlider::sub-page:horizontal {{
     border-radius: 2px;
 }}
 QSlider::handle:horizontal {{
-    background: {C_ACCENT};
-    border: 2px solid {C_PANEL_BG};
-    width: 12px;
-    height: 12px;
-    margin: -4px 0;
-    border-radius: 6px;
+    background: #D8E4EA;
+    border: 1px solid #BCD2DA;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
 }}
 QSlider::handle:horizontal:hover {{
-    background: {C_ACCENT_HOVER};
+    background: #FFFFFF;
 }}
 
 /* ── ComboBox ── */
 QComboBox {{
-    background-color: {C_RAISED_PANEL};
+    background-color: #0D141B;
     border: 1px solid {C_BORDER};
-    border-radius: 6px;
-    padding: 4px 10px;
+    border-radius: 7px;
+    padding: 7px 12px;
     color: {C_TEXT_MAIN};
-    font-size: 13px;
+    font-size: 15px;
 }}
 QComboBox:hover {{
     border-color: {C_ACCENT};

@@ -1,6 +1,16 @@
-PySide6>=6.6.0
-numpy>=1.26.0
-opencv-python-headless>=4.9.0
-imageio>=2.33.0
-imageio-ffmpeg>=0.4.9
-Pillow>=10.2.0
+# Parallax Studio Requirements
+# Target: macOS Apple Silicon (arm64)
+# Python 3.11+
+
+# UI Framework
+PySide6==6.11.0
+
+# Image Processing & Math
+numpy==2.2.3
+opencv-python-headless==4.11.0.86
+Pillow==11.1.0
+
+# Video & Animation Export
+imageio[ffmpeg]==2.37.0
+# Note: ffmpeg should also be installed via Homebrew for development
+# brew install ffmpeg
