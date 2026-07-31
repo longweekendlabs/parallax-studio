@@ -4,6 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
     QImage,
     QLinearGradient,
     QPainter,
@@ -79,6 +80,7 @@ class CanvasToolbar(QWidget):
         self.overlay_button.setChecked(True)
         self.overlay_button.setFixedHeight(30)
         self.overlay_button.setCursor(Qt.PointingHandCursor)
+        self.overlay_button.setToolTip("Show the painted depth mask over the image. Cyan is nearer, violet is farther, and neutral depth stays transparent.")
         self.overlay_button.setStyleSheet(_tool_button_style(True))
         self.overlay_button.toggled.connect(self._sync_overlay_style)
         self.overlay_button.toggled.connect(self.overlayToggled.emit)
@@ -87,6 +89,7 @@ class CanvasToolbar(QWidget):
         self.fit_width_button = QPushButton("Fit Width")
         self.fit_width_button.setFixedHeight(30)
         self.fit_width_button.setCursor(Qt.PointingHandCursor)
+        self.fit_width_button.setToolTip("Zoom the canvas until the artwork fills the available width.")
         self.fit_width_button.setStyleSheet(_tool_button_style(False))
         self.fit_width_button.clicked.connect(self.fitWidthRequested.emit)
         row.addWidget(self.fit_width_button)
@@ -94,6 +97,7 @@ class CanvasToolbar(QWidget):
         self.fit_window_button = QPushButton("Fit Window")
         self.fit_window_button.setFixedHeight(30)
         self.fit_window_button.setCursor(Qt.PointingHandCursor)
+        self.fit_window_button.setToolTip("Zoom out enough to keep the entire artwork visible.")
         self.fit_window_button.setStyleSheet(_tool_button_style(False))
         self.fit_window_button.clicked.connect(self.fitWindowRequested.emit)
         row.addWidget(self.fit_window_button)
@@ -108,6 +112,7 @@ class CanvasToolbar(QWidget):
         self.zoom_slider.setValue(100)
         self.zoom_slider.setFixedWidth(190)
         self.zoom_slider.setFixedHeight(18)
+        self.zoom_slider.setToolTip("Canvas zoom only. It does not change export size or parallax strength.")
         self.zoom_slider.valueChanged.connect(self._sync_zoom_value)
         self.zoom_slider.valueChanged.connect(self.zoomPercentChanged.emit)
         row.addWidget(self.zoom_slider)
@@ -157,6 +162,7 @@ _BORDER = 12.0  # drag-border thickness in screen px
 
 class PreviewStage(QWidget):
     depthPaintRequested = Signal(int, int, bool)
+    depthPaintFinished = Signal()
     layerMoveRequested = Signal(int, int)
     layerResizeRequested = Signal(float)  # absolute new scale value
     layerTransformStarted = Signal()
@@ -176,6 +182,9 @@ class PreviewStage(QWidget):
         self._current_layer_scale: float = 1.0
         self._brush_size: int = 28
         self._brush_opacity: float = 0.75
+        self._brush_erasing: bool = False
+        self._brush_hardness: float = 0.18
+        self._brush_depth_value: float = 0.62
         self._hover_pos: QPointF | None = None
         # drag state: 'paint' | 'move' | 'resize' | None
         self._drag_intent: str | None = None
@@ -222,9 +231,19 @@ class PreviewStage(QWidget):
         self._selected_layer_locked = locked
         self.update()
 
-    def set_brush_preview(self, size: int, opacity: float):
+    def set_brush_preview(
+        self,
+        size: int,
+        opacity: float,
+        erasing: bool = False,
+        hardness: float = 0.18,
+        depth_value: float = 0.62,
+    ):
         self._brush_size = max(1, int(size))
         self._brush_opacity = max(0.0, min(1.0, float(opacity)))
+        self._brush_erasing = bool(erasing)
+        self._brush_hardness = max(0.0, min(1.0, float(hardness)))
+        self._brush_depth_value = max(0.0, min(1.0, float(depth_value)))
         self.update()
 
     # ── geometry helpers ──────────────────────────────────────────────────
@@ -378,15 +397,58 @@ class PreviewStage(QWidget):
             return
         radius = max(4.0, (self._brush_size * self._current_layer_scale * self._display_scale()) / 2.0)
         radius = min(radius, 180.0)
-        alpha = int(90 + self._brush_opacity * 135)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.setBrush(QColor(255, 255, 255, int(18 + self._brush_opacity * 28)))
-        p.setPen(QPen(QColor(255, 255, 255, alpha), 1.5))
+
+        # Colour says what the stroke does: amber erases, cyan pushes toward the
+        # viewer, violet pushes away. Matches the depth overlay's near/far hues.
+        if self._brush_erasing:
+            accent = QColor("#F2B35E")
+        elif self._brush_depth_value >= 0.5:
+            accent = QColor(61, 217, 201)
+        else:
+            accent = QColor(166, 139, 255)
+
+        # Fill reproduces the brush's real falloff: solid to the hardness
+        # radius, then a linear fade to nothing, scaled by strength.
+        hard_stop = min(0.99, self._brush_hardness)
+        peak = int(round(18 + 150 * self._brush_opacity))
+        grad = QRadialGradient(self._hover_pos, radius)
+        grad.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), peak))
+        grad.setColorAt(hard_stop, QColor(accent.red(), accent.green(), accent.blue(), peak))
+        grad.setColorAt(1.0, QColor(accent.red(), accent.green(), accent.blue(), 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grad)
         p.drawEllipse(self._hover_pos, radius, radius)
-        p.setPen(QPen(QColor(0, 0, 0, 160), 1.0))
+
+        # Outer edge: the brush's full extent.
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(0, 0, 0, 190), 3.0))
         p.drawEllipse(self._hover_pos, radius + 1.5, radius + 1.5)
-        p.setPen(QPen(QColor(255, 255, 255, alpha), 1.0))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 230), 1.5))
+        p.drawEllipse(self._hover_pos, radius, radius)
+
+        # Inner dashed ring: where the falloff starts. Hidden when the two rings
+        # would overlap and just read as one thick line.
+        hard_radius = radius * hard_stop
+        if radius - hard_radius > 3.0 and hard_radius > 3.0:
+            pen = QPen(QColor(accent.red(), accent.green(), accent.blue(), 170), 1.0, Qt.PenStyle.DashLine)
+            pen.setDashPattern([3.0, 3.0])
+            p.setPen(pen)
+            p.drawEllipse(self._hover_pos, hard_radius, hard_radius)
+
+        # Strength: a short gauge under the cursor, filled in proportion.
+        if radius >= 14.0:
+            gauge_w = min(radius * 1.2, 46.0)
+            gx = self._hover_pos.x() - gauge_w / 2.0
+            gy = self._hover_pos.y() + radius + 7.0
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 150))
+            p.drawRoundedRect(QRectF(gx - 1, gy - 1, gauge_w + 2, 5.0), 2.5, 2.5)
+            p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 235))
+            p.drawRoundedRect(QRectF(gx, gy, gauge_w * self._brush_opacity, 3.0), 1.5, 1.5)
+
+        p.setPen(QPen(QColor(255, 255, 255, 230), 1.0))
         p.drawLine(QPointF(self._hover_pos.x() - 4, self._hover_pos.y()), QPointF(self._hover_pos.x() + 4, self._hover_pos.y()))
         p.drawLine(QPointF(self._hover_pos.x(), self._hover_pos.y() - 4), QPointF(self._hover_pos.x(), self._hover_pos.y() + 4))
         p.restore()
@@ -522,6 +584,8 @@ class PreviewStage(QWidget):
     def mouseReleaseEvent(self, event):
         if self._drag_intent in {"move", "resize"}:
             self.layerTransformFinished.emit()
+        elif self._drag_intent == "paint" and self._paint_active:
+            self.depthPaintFinished.emit()
         self._drag_intent = None
         self._paint_active = False
         self._drag_origin = None
@@ -545,33 +609,62 @@ class PreviewStage(QWidget):
         p.save()
         p.setClipPath(path)
 
-        sky = QLinearGradient(QPointF(r.x(), r.y()), QPointF(r.x(), r.bottom()))
-        sky.setColorAt(0, QColor("#263957"))
-        sky.setColorAt(0.2, QColor("#E38B6C"))
-        sky.setColorAt(0.42, QColor("#666889"))
-        sky.setColorAt(0.72, QColor("#283852"))
-        sky.setColorAt(1, QColor("#0F1927"))
-        p.fillRect(r, sky)
+        bg = QLinearGradient(QPointF(r.x(), r.y()), QPointF(r.x(), r.bottom()))
+        bg.setColorAt(0, QColor("#101922"))
+        bg.setColorAt(1, QColor("#070B0F"))
+        p.fillRect(r, bg)
 
-        sun = QRadialGradient(QPointF(r.center().x(), r.y() + r.height() * 0.38), r.width() * 0.34)
-        sun.setColorAt(0, QColor("#FFC27A99"))
-        sun.setColorAt(0.48, QColor("#E86C5B33"))
-        sun.setColorAt(1, QColor("#00000000"))
-        p.fillRect(r, sun)
+        center = QPointF(r.center())
+        icon_size = min(104, max(72, int(min(r.width(), r.height()) * 0.15)))
+        icon = QRectF(
+            center.x() - icon_size / 2,
+            center.y() - icon_size - 46,
+            icon_size,
+            icon_size,
+        )
 
-        self._paint_mountain(p, r, 0.56, "#D7E0EA", "#40506C")
-        self._paint_mountain(p, r, 0.66, "#31405A", "#172235", offset=-90)
-        self._paint_mountain(p, r, 0.78, "#213047", "#111B2A", offset=80)
-        self._paint_city(p, r)
-        self._paint_character(p, r)
-        self._paint_branches(p, r)
-        self._paint_petals(p, r)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(QColor("#101923"))
+        p.setPen(QPen(QColor("#2E3D49"), 1.4))
+        p.drawRoundedRect(icon, 14, 14)
 
-        vignette = QRadialGradient(QPointF(r.center()), r.width() * 0.72)
-        vignette.setColorAt(0, QColor("#00000000"))
-        vignette.setColorAt(0.72, QColor("#00000011"))
-        vignette.setColorAt(1, QColor("#00000088"))
-        p.fillRect(r, vignette)
+        panel_w = icon.width() * 0.48
+        panel_h = icon.height() * 0.58
+        left_panel = QRectF(icon.x() + icon.width() * 0.20, icon.y() + icon.height() * 0.23, panel_w, panel_h)
+        right_panel = left_panel.translated(icon.width() * 0.16, icon.height() * 0.12)
+        p.setBrush(QColor("#1A2732"))
+        p.setPen(QPen(QColor(C_ACCENT), 1.6))
+        p.drawRoundedRect(right_panel, 4, 4)
+        p.setBrush(QColor("#263541"))
+        p.drawRoundedRect(left_panel, 4, 4)
+        p.setPen(QPen(QColor("#E7EEF2"), 2.0))
+        p.drawLine(
+            QPointF(icon.center().x() - 12, icon.center().y() + 30),
+            QPointF(icon.center().x() + 12, icon.center().y() + 30),
+        )
+
+        title_font = QFont()
+        title_font.setPixelSize(22)
+        title_font.setBold(True)
+        p.setFont(title_font)
+        p.setPen(QColor("#E7EEF2"))
+        title_rect = QRectF(r.x(), icon.bottom() + 24, r.width(), 34)
+        p.drawText(title_rect, Qt.AlignmentFlag.AlignHCenter, "Open artwork to start a parallax scene")
+
+        body_font = QFont()
+        body_font.setPixelSize(14)
+        p.setFont(body_font)
+        p.setPen(QColor("#91A1AD"))
+        p.drawText(
+            QRectF(r.x(), title_rect.bottom() + 10, r.width(), 24),
+            Qt.AlignmentFlag.AlignHCenter,
+            "Load a .parlx project, import image layers, or drop PNG/JPG/WebP files here",
+        )
+        p.drawText(
+            QRectF(r.x(), title_rect.bottom() + 34, r.width(), 24),
+            Qt.AlignmentFlag.AlignHCenter,
+            "The preview and depth tools become active after your first layer is added",
+        )
 
         p.restore()
         p.setPen(QPen(QColor(255, 255, 255, 30), 1))
@@ -673,6 +766,7 @@ class CanvasPanel(QWidget):
     imageFilesDropped = Signal(list)
     unsupportedFilesDropped = Signal(list)
     depthPaintRequested = Signal(int, int, bool)
+    depthPaintFinished = Signal()
     layerMoveRequested = Signal(int, int)
     layerResizeRequested = Signal(float)
     layerTransformStarted = Signal()
@@ -691,6 +785,7 @@ class CanvasPanel(QWidget):
         layout.addWidget(self.toolbar)
         layout.addWidget(self.stage, 1)
         self.stage.depthPaintRequested.connect(self.depthPaintRequested.emit)
+        self.stage.depthPaintFinished.connect(self.depthPaintFinished.emit)
         self.stage.layerMoveRequested.connect(self.layerMoveRequested.emit)
         self.stage.layerResizeRequested.connect(self.layerResizeRequested.emit)
         self.stage.layerTransformStarted.connect(self.layerTransformStarted.emit)
@@ -721,8 +816,15 @@ class CanvasPanel(QWidget):
     ):
         self.stage.set_selected_layer_bounds(bounds, layer_scale, locked)
 
-    def set_brush_preview(self, size: int, opacity: float):
-        self.stage.set_brush_preview(size, opacity)
+    def set_brush_preview(
+        self,
+        size: int,
+        opacity: float,
+        erasing: bool = False,
+        hardness: float = 0.18,
+        depth_value: float = 0.62,
+    ):
+        self.stage.set_brush_preview(size, opacity, erasing, hardness, depth_value)
 
     def set_zoom_mode(self, mode: str):
         self.stage.set_zoom_mode(mode)

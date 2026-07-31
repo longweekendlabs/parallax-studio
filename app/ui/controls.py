@@ -50,12 +50,19 @@ def _value(text: str) -> QLabel:
     return lbl
 
 
+def _set_tooltip_tree(widget: QWidget, text: str):
+    widget.setToolTip(text)
+    for child in widget.findChildren(QWidget):
+        child.setToolTip(text)
+
+
 @dataclass(frozen=True)
 class BrushSettings:
-    size: int = 50
-    depth_value: float = 1.0
-    hardness: float = 0.5
-    opacity: float = 0.25
+    size: int = 31
+    depth_value: float = 0.62
+    hardness: float = 0.18
+    opacity: float = 0.10
+    erase: bool = False
 
 
 @dataclass(frozen=True)
@@ -303,6 +310,8 @@ class LoopButtons(QWidget):
         row.setSpacing(8)
         self.seamless = QPushButton("Seamless")
         self.bounce = QPushButton("Bounce")
+        self.seamless.setToolTip("Use for final looping exports. Motion wraps back to the first frame without a visible stop.")
+        self.bounce.setToolTip("Use while inspecting depth. Motion goes out and back, which makes warping easier to spot.")
         for button in [self.seamless, self.bounce]:
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
@@ -513,6 +522,11 @@ class SmallAction(QPushButton):
                 border-color: {C_ACCENT};
                 color: {C_ACCENT};
             }}
+            QPushButton:checked {{
+                background: {C_ACCENT}22;
+                border-color: {C_ACCENT};
+                color: {C_ACCENT};
+            }}
             QPushButton:disabled {{
                 background: #0B1117;
                 border-color: #1A252E;
@@ -580,25 +594,70 @@ class ControlsPanel(QWidget):
         col.setSpacing(12)
 
         depth = Card("⌁", "DEPTH BRUSH")
-        self.brush_size = SimpleSliderRow("Brush Size", 23, lambda v: str(max(4, int(v * 2.2))))
-        self.depth_value = SimpleSliderRow("Depth Value", 100, lambda v: f"{v / 100:.2f}")
-        self.hardness = SimpleSliderRow("Hardness", 50, lambda v: f"{v}%")
-        self.opacity = SimpleSliderRow("Brush Strength", 25, lambda v: f"{v}%")
+        self.brush_size = SimpleSliderRow("Brush Size", 14, lambda v: str(max(4, int(v * 2.2))))
+        self.depth_value = SimpleSliderRow("Depth Value", 62, lambda v: f"{v / 100:.2f}")
+        self.hardness = SimpleSliderRow("Hardness", 18, lambda v: f"{v}%")
+        self.opacity = SimpleSliderRow("Brush Strength", 10, lambda v: f"{v}%")
+        _set_tooltip_tree(
+            self.brush_size,
+            "Width of each depth stroke. Use smaller strokes around object edges; reserve large strokes for broad foreground or background areas."
+        )
+        _set_tooltip_tree(
+            self.depth_value,
+            "Depth painted by the brush. 0.50 is neutral, higher comes toward the viewer, lower moves away. The default is close to neutral so one stroke stays subtle."
+        )
+        _set_tooltip_tree(
+            self.hardness,
+            "Brush edge falloff. Low values blend into the existing depth map; high values make sharp cutouts that often warp during motion."
+        )
+        _set_tooltip_tree(
+            self.opacity,
+            "How much one pass changes depth. Keep this low and build depth with repeated strokes for smoother parallax."
+        )
         for row in [self.brush_size, self.depth_value, self.hardness, self.opacity]:
             row.valueChanged.connect(self._emit_brush_settings)
             depth.layout.addWidget(row)
+
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(8)
+        self.paint_mode_button = SmallAction("Paint", True)
+        self.erase_mode_button = SmallAction("Erase")
+        for button in [self.paint_mode_button, self.erase_mode_button]:
+            button.setCheckable(True)
+            mode_row.addWidget(button)
+        self.paint_mode_button.setChecked(True)
+        self.paint_mode_button.setToolTip("Paint the selected depth value onto the layer.")
+        self.erase_mode_button.setToolTip(
+            "Erase depth paint by brushing back toward neutral 0.50. Erase uses a stronger stroke than Paint so mistakes clear quickly."
+        )
+        self.paint_mode_button.clicked.connect(lambda: self._set_brush_mode(False))
+        self.erase_mode_button.clicked.connect(lambda: self._set_brush_mode(True))
+        depth.layout.addLayout(mode_row)
+
         buttons = QGridLayout()
         buttons.setHorizontalSpacing(8)
         buttons.setVerticalSpacing(8)
         self.auto_depth_button = SmallAction("Auto Depth", True)
-        self.auto_depth_button.setEnabled(False)
-        self.auto_depth_button.setToolTip("Auto Depth is planned for Phase 7")
+        self.auto_depth_button.setToolTip(
+            "Generate a starter depth map from the selected image. This is editable and undoable, not final AI depth."
+        )
         self.clear_depth_button = SmallAction("Clear Depth")
         self.invert_depth_button = SmallAction("Invert")
-        self.blur_depth_button = SmallAction("Blur")
+        self.blur_depth_button = SmallAction("Soften Once")
+        self.clear_depth_button.setToolTip(
+            "Return the selected layer to flat 0.50 depth. Parallax motion will pause until the layer has depth variation again."
+        )
+        self.invert_depth_button.setToolTip(
+            "Swap near and far values on the selected layer. Use this when the foreground and background move backwards."
+        )
+        self.blur_depth_button.setToolTip(
+            "Apply one undoable blur pass to the selected depth map. This is not an on/off toggle; repeated clicks keep softening."
+        )
         self.clear_depth_button.clicked.connect(self.clearDepthRequested.emit)
         self.invert_depth_button.clicked.connect(self.invertDepthRequested.emit)
         self.blur_depth_button.clicked.connect(self.blurDepthRequested.emit)
+        self.auto_depth_button.clicked.connect(self.autoDepthRequested.emit)
         for i, button in enumerate([
             self.auto_depth_button,
             self.clear_depth_button,
@@ -610,12 +669,31 @@ class ControlsPanel(QWidget):
         col.addWidget(depth)
 
         motion = Card("≈", "MOTION")
+        self.motion_notice = QLabel("Open an image and paint subtle depth variation to enable parallax motion.")
+        self.motion_notice.setWordWrap(True)
+        self.motion_notice.setStyleSheet(
+            f"""
+            QLabel {{
+                background: #0D141B;
+                border: 1px solid {C_BORDER};
+                border-radius: 7px;
+                color: {C_TEXT_SECONDARY};
+                font-size: 12px;
+                padding: 8px 10px;
+            }}
+            """
+        )
+        motion.layout.addWidget(self.motion_notice)
         self.movement_strength = RangeStepper(
             "movement",
             [("Still", 0.0), ("Calm", 0.5), ("Normal", 1.0), ("Dramatic", 2.0)],
             2,
             formatter=lambda value: f"{value:.2f}x",
             magnetic_center=True,
+        )
+        _set_tooltip_tree(
+            self.movement_strength,
+            "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic."
         )
         self.focus_depth = RangeStepper(
             "focus",
@@ -624,6 +702,10 @@ class ControlsPanel(QWidget):
             formatter=lambda value: f"{value:.2f}",
             magnetic_center=True,
         )
+        _set_tooltip_tree(
+            self.focus_depth,
+            "Depth plane that stays most anchored. Near steadies foreground subjects; Far steadies the background."
+        )
         self.motion_path = RangeStepper(
             "path",
             [("Horizontal", (1.0, 0.0)), ("Circular", (1.0, 1.0)), ("Vertical", (0.0, 1.0))],
@@ -631,13 +713,25 @@ class ControlsPanel(QWidget):
             path_preview=True,
             magnetic_center=True,
         )
+        _set_tooltip_tree(
+            self.motion_path,
+            "Direction of camera motion. Horizontal is easiest to judge; Circular combines side-to-side and vertical drift."
+        )
         self.zoom_strength = SliderRow("zoom", 35, lambda v: f"{v / 100:.2f}", "Still", "Breathe", magnetic_center=True)
+        _set_tooltip_tree(
+            self.zoom_strength,
+            "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing."
+        )
         self.zoom_strength.valueChanged.connect(self._emit_motion_settings)
         for stepper in [self.movement_strength, self.focus_depth, self.motion_path]:
             stepper.changed.connect(self._emit_motion_settings)
             motion.layout.addWidget(stepper)
         motion.layout.insertWidget(2, self.zoom_strength)
         self.duration = SliderRow("duration", 43, lambda v: f"{1.0 + v / 100 * 7.0:.1f}s", "Short", "Long", magnetic_center=True)
+        _set_tooltip_tree(
+            self.duration,
+            "Length of one loop. Short loops feel faster; longer loops make the same motion calmer."
+        )
         self.duration.valueChanged.connect(self._emit_motion_settings)
         motion.layout.addWidget(self.duration)
         motion.layout.addWidget(_label("Loop"))
@@ -646,15 +740,57 @@ class ControlsPanel(QWidget):
         motion.layout.addWidget(self.loop_type)
         self.layer_intensity = SliderRow("layer", 65, lambda v: f"{v / 100:.2f}", "Subtle", "Strong", magnetic_center=True)
         self.global_intensity = SliderRow("global", 75, lambda v: f"{v / 100:.2f}", "Low", "High", magnetic_center=True)
+        _set_tooltip_tree(
+            self.layer_intensity,
+            "Motion multiplier for the selected layer only. Lower this if this image layer warps more than the rest of the scene."
+        )
+        _set_tooltip_tree(
+            self.global_intensity,
+            "Master motion multiplier for preview and export. Lower this before increasing brush strength."
+        )
         for row in [self.layer_intensity, self.global_intensity]:
             row.valueChanged.connect(self._emit_motion_settings)
             motion.layout.addWidget(row)
-        motion.layout.addWidget(_compact_value_row("Preview FPS", "24"))
+        self.preview_fps_row = RangeStepper(
+            "preview fps",
+            [("15", 15), ("24", 24), ("30", 30)],
+            1,
+            formatter=lambda value: f"{int(value)} fps",
+        )
+        _set_tooltip_tree(
+            self.preview_fps_row,
+            "Live preview playback rate while editing. This does not control exported video frame rate."
+        )
+        self.preview_fps_row.changed.connect(self._emit_motion_settings)
+        motion.layout.addWidget(self.preview_fps_row)
         col.addWidget(motion)
+        self.motion_widgets = [
+            self.movement_strength,
+            self.focus_depth,
+            self.motion_path,
+            self.zoom_strength,
+            self.duration,
+            self.loop_type,
+            self.layer_intensity,
+            self.global_intensity,
+            self.preview_fps_row,
+        ]
+        self.motion_tooltips = {
+            self.movement_strength: "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic.",
+            self.focus_depth: "Depth plane that stays most anchored. Near steadies foreground subjects; Far steadies the background.",
+            self.motion_path: "Direction of camera motion. Horizontal is easiest to judge; Circular combines side-to-side and vertical drift.",
+            self.zoom_strength: "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing.",
+            self.duration: "Length of one loop. Short loops feel faster; longer loops make the same motion calmer.",
+            self.loop_type: "Seamless wraps cleanly for export; Bounce moves out and back, which is easier for inspecting depth problems.",
+            self.layer_intensity: "Motion multiplier for the selected layer only. Lower this if this image layer warps more than the rest of the scene.",
+            self.global_intensity: "Master motion multiplier for preview and export. Lower this before increasing brush strength.",
+            self.preview_fps_row: "Live preview playback rate while editing. This does not control exported video frame rate.",
+        }
 
         col.addStretch()
         scroll.setWidget(content)
         root.addWidget(scroll)
+        self.set_motion_ready(False, False)
         self._emit_brush_settings()
         self._emit_motion_settings()
 
@@ -664,10 +800,20 @@ class ControlsPanel(QWidget):
             depth_value=self.depth_value.value() / 100,
             hardness=self.hardness.value() / 100,
             opacity=self.opacity.value() / 100,
+            erase=self.erase_mode_button.isChecked(),
         )
 
     def _emit_brush_settings(self):
         self.brushSettingsChanged.emit(self.brush_settings())
+
+    def _set_brush_mode(self, erase: bool):
+        self.erase_mode_button.blockSignals(True)
+        self.paint_mode_button.blockSignals(True)
+        self.erase_mode_button.setChecked(erase)
+        self.paint_mode_button.setChecked(not erase)
+        self.erase_mode_button.blockSignals(False)
+        self.paint_mode_button.blockSignals(False)
+        self._emit_brush_settings()
 
     def motion_settings(self) -> MotionSettings:
         scale_x, scale_y = self.motion_path.value()
@@ -681,7 +827,7 @@ class ControlsPanel(QWidget):
             layer_intensity=self.layer_intensity.value() / 100,
             global_intensity=self.global_intensity.value() / 100,
             duration=1.0 + self.duration.value() / 100 * 7.0,
-            preview_fps=24,
+            preview_fps=int(self.preview_fps_row.value()),
         )
 
     def _emit_motion_settings(self):
@@ -697,6 +843,7 @@ class ControlsPanel(QWidget):
         self.loop_type._sync()
         self.layer_intensity.setValue(max(0, min(100, int(round(settings.layer_intensity * 100)))), emit=False)
         self.global_intensity.setValue(max(0, min(100, int(round(settings.global_intensity * 100)))), emit=False)
+        self.preview_fps_row.set_value(settings.preview_fps, emit=False)
 
     def set_selected_layer_motion(self, layer, locked: bool = False):
         self.movement_strength.set_value(layer.movement_strength, emit=False)
@@ -709,3 +856,21 @@ class ControlsPanel(QWidget):
         self.layer_intensity.setValue(max(0, min(100, int(round(layer.intensity * 100)))), emit=False)
         self.global_intensity.setValue(max(0, min(100, int(round(layer.global_intensity * 100)))), emit=False)
         self.layer_intensity.slider.setEnabled(True)
+
+    def set_motion_ready(self, has_layer: bool, has_depth_motion: bool):
+        ready = has_layer and has_depth_motion
+        for widget in self.motion_widgets:
+            widget.setEnabled(ready)
+            _set_tooltip_tree(
+                widget,
+                self.motion_tooltips.get(widget, "")
+                if ready
+                else "Motion controls are disabled because the selected layer has flat depth. Paint gentle variation first.",
+            )
+
+        if not has_layer:
+            self.motion_notice.setText("Open or drop an image layer first. Motion controls stay disabled until there is artwork and depth variation.")
+        elif not has_depth_motion:
+            self.motion_notice.setText("Paint gentle depth variation on the selected layer. Flat 0.50 depth has no parallax to animate.")
+        else:
+            self.motion_notice.setText("Preview uses the selected layer depth map. If motion looks warped, lower brush strength or blur the depth map.")

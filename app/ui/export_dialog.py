@@ -6,7 +6,6 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core.exporter import export_gif, export_mp4, render_frames
+from app.core.exporter import export_gif, export_mp4, is_cuda_available, is_nvenc_available, render_frames
 from app.core.layer import Layer
 from app.ui.theme import (
     C_ACCENT,
@@ -34,6 +33,7 @@ from app.ui.theme import (
     C_TEXT_SECONDARY,
     C_WINDOW_BG,
 )
+from app.utils.file_dialogs import save_export
 
 
 class _ExportWorker(QObject):
@@ -52,6 +52,8 @@ class _ExportWorker(QObject):
         focus_depth: float,
         fmt: str,
         output_path: Path,
+        use_gpu: bool = False,
+        use_nvenc: bool = True,
     ):
         super().__init__()
         self._layers = layers
@@ -63,6 +65,8 @@ class _ExportWorker(QObject):
         self._focus_depth = focus_depth
         self._fmt = fmt
         self._output_path = output_path
+        self._use_gpu = use_gpu
+        self._use_nvenc = use_nvenc
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -72,9 +76,16 @@ class _ExportWorker(QObject):
     def run(self) -> None:
         try:
             total_frames = max(1, int(round(self._duration * self._fps)))
+            # Set by render_frames once it knows which backend it actually used,
+            # so the label never claims GPU while the CPU path is running.
+            render_label = "Rendering"
+
+            def backend_cb(backend: str) -> None:
+                nonlocal render_label
+                render_label = "Rendering (GPU)" if backend == "cuda" else "Rendering (CPU)"
 
             def render_cb(i: int, _t: int) -> None:
-                self.progress.emit(i, total_frames * 2, f"Rendering  {i} / {total_frames}")
+                self.progress.emit(i, total_frames * 2, f"{render_label}  {i} / {total_frames}")
 
             frames = render_frames(
                 self._layers,
@@ -86,6 +97,8 @@ class _ExportWorker(QObject):
                 self._focus_depth,
                 progress_cb=render_cb,
                 cancelled_cb=lambda: self._cancelled,
+                backend_cb=backend_cb,
+                use_gpu=self._use_gpu,
             )
 
             if self._cancelled:
@@ -96,12 +109,20 @@ class _ExportWorker(QObject):
                 return
 
             if self._fmt == "MP4":
-                self.progress.emit(total_frames, total_frames * 2, "Encoding MP4…")
+                nvenc = self._use_nvenc and is_nvenc_available()
+                enc_label = "Encoding MP4 (GPU)" if nvenc else "Encoding MP4…"
+                self.progress.emit(total_frames, total_frames * 2, enc_label)
 
                 def encode_cb(i: int, t: int) -> None:
                     self.progress.emit(total_frames + i, total_frames * 2, f"Encoding  {i} / {t}")
 
-                export_mp4(frames, self._output_path, self._fps, progress_cb=encode_cb)
+                export_mp4(
+                    frames,
+                    self._output_path,
+                    self._fps,
+                    progress_cb=encode_cb,
+                    use_nvenc=self._use_nvenc,
+                )
             else:
                 self.progress.emit(total_frames, total_frames * 2, "Building GIF…")
                 export_gif(frames, self._output_path, self._fps)
@@ -156,15 +177,20 @@ class ExportDialog(QDialog):
         motion_settings,
         last_export_dir: str = "",
         parent=None,
+        use_gpu: bool = False,
+        use_nvenc: bool = True,
     ):
         super().__init__(parent)
         self._layers = layers
         self._motion = motion_settings
+        self._use_gpu = use_gpu
+        self._use_nvenc = use_nvenc
         self._last_export_dir = last_export_dir or str(Path.home() / "Movies")
         self._fmt = "MP4"
         self._thread: QThread | None = None
         self._worker: _ExportWorker | None = None
         self.last_used_dir: str = ""
+        self._user_selected_path: bool = False
 
         self.setWindowTitle("Export Animation")
         self.setModal(True)
@@ -181,12 +207,25 @@ class ExportDialog(QDialog):
         layout.setContentsMargins(22, 20, 22, 20)
         layout.setSpacing(14)
 
-        # Title
+        # Header Row with Title & CUDA Badge
+        header_row = QHBoxLayout()
         title = QLabel("Export Animation")
         title.setStyleSheet(
             f"font-size: 17px; font-weight: 700; color: {C_TEXT_MAIN}; background: transparent;"
         )
-        layout.addWidget(title)
+        header_row.addWidget(title)
+
+        if is_cuda_available() or is_nvenc_available():
+            cuda_badge = QLabel("⚡ CUDA GPU Active")
+            cuda_badge.setStyleSheet(
+                f"background: #102A1E; color: #4ADE80; border: 1px solid #166534; "
+                f"border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 600;"
+            )
+            cuda_badge.setToolTip("CUDA GPU acceleration is active for fast rendering and hardware NVENC video encoding.")
+            header_row.addStretch()
+            header_row.addWidget(cuda_badge)
+
+        layout.addLayout(header_row)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -235,6 +274,8 @@ class ExportDialog(QDialog):
 
         self._mp4_btn = QPushButton("MP4")
         self._gif_btn = QPushButton("GIF")
+        self._mp4_btn.setToolTip("Best for sharing, editing, and high-quality playback. Uses H.264 video encoding.")
+        self._gif_btn.setToolTip("Best for quick looping previews. File size grows quickly, especially at large resolutions.")
         for btn in (self._mp4_btn, self._gif_btn):
             btn.setFixedSize(88, 32)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -264,6 +305,7 @@ class ExportDialog(QDialog):
         self._duration_slider.setRange(2, 30)
         self._duration_slider.setValue(max(2, min(30, int(self._motion.duration))))
         self._duration_slider.setFixedHeight(18)
+        self._duration_slider.setToolTip("Length of the rendered loop. Longer exports move more slowly and create more frames.")
         self._duration_val = _value_box(f"{self._duration_slider.value()} s")
         self._duration_slider.valueChanged.connect(
             lambda v: self._duration_val.setText(f"{v} s")
@@ -277,10 +319,11 @@ class ExportDialog(QDialog):
         fps_row.addWidget(_row_label("Frame Rate"))
         fps_row.addStretch()
         self._fps_combo = QComboBox()
-        self._fps_combo.addItems(["15 fps", "24 fps", "30 fps"])
-        self._fps_combo.setCurrentText(f"{self._motion.preview_fps} fps")
-        if self._fps_combo.currentIndex() < 0:
-            self._fps_combo.setCurrentIndex(1)  # default 24
+        self._fps_combo.addItems(["24 fps", "30 fps", "60 fps"])
+        self._fps_combo.setToolTip(
+            "Frames per second for the exported file. 60 fps produces smooth motion playback."
+        )
+        self._fps_combo.setCurrentText("60 fps")
         self._fps_combo.setFixedWidth(110)
         fps_row.addWidget(self._fps_combo)
         col.addLayout(fps_row)
@@ -291,6 +334,7 @@ class ExportDialog(QDialog):
         res_row.addStretch()
         self._res_combo = QComboBox()
         self._res_combo.addItems(["100%", "75%", "50%", "25%"])
+        self._res_combo.setToolTip("Output size relative to the current canvas. Lower values render faster and create smaller files.")
         self._res_combo.setCurrentIndex(0)
         self._res_combo.setFixedWidth(110)
         res_row.addWidget(self._res_combo)
@@ -308,6 +352,7 @@ class ExportDialog(QDialog):
         path_row = QHBoxLayout()
         path_row.setSpacing(8)
         self._path_edit = QLineEdit()
+        self._path_edit.setToolTip("Destination file for the rendered animation.")
         self._path_edit.setStyleSheet(
             f"""
             QLineEdit {{
@@ -324,6 +369,7 @@ class ExportDialog(QDialog):
         )
         browse_btn = QPushButton("Browse")
         browse_btn.setFixedWidth(84)
+        browse_btn.setToolTip("Pick the folder and filename for the export.")
         browse_btn.clicked.connect(self._browse_output)
         path_row.addWidget(self._path_edit, stretch=1)
         path_row.addWidget(browse_btn)
@@ -372,11 +418,13 @@ class ExportDialog(QDialog):
 
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setFixedSize(96, 36)
+        self._cancel_btn.setToolTip("Stop the current render, or close this dialog before rendering starts.")
         self._cancel_btn.clicked.connect(self._on_cancel)
 
         self._export_btn = QPushButton("⇧  Export")
         self._export_btn.setObjectName("exportBtn")
         self._export_btn.setFixedSize(124, 36)
+        self._export_btn.setToolTip("Render the current parallax motion and encode it with the selected format settings.")
         self._export_btn.clicked.connect(self._start_export)
 
         row.addWidget(self._cancel_btn)
@@ -447,16 +495,16 @@ class ExportDialog(QDialog):
             self._path_edit.setText(str(Path(current).with_suffix(ext)))
 
     def _browse_output(self) -> None:
-        filter_str = "MP4 Video (*.mp4)" if self._fmt == "MP4" else "GIF Animation (*.gif)"
         start = self._path_edit.text().strip() or self._last_export_dir
-        path, _ = QFileDialog.getSaveFileName(self, "Save Export As", start, filter_str)
+        ext = ".mp4" if self._fmt == "MP4" else ".gif"
+        path = save_export(self, "Save Export As", start, ext)
         if path:
             p = Path(path)
-            ext = ".mp4" if self._fmt == "MP4" else ".gif"
             if p.suffix.lower() != ext:
                 p = p.with_suffix(ext)
             self._path_edit.setText(str(p))
             self.last_used_dir = str(p.parent)
+            self._user_selected_path = True
 
     # ── export orchestration ────────────────────────────────────────────────
 
@@ -479,6 +527,11 @@ class ExportDialog(QDialog):
             w.setEnabled(enabled)
 
     def _start_export(self) -> None:
+        if not self._user_selected_path:
+            self._browse_output()
+            if not self._user_selected_path:
+                return  # User cancelled save file selection dialog
+
         raw = self._path_edit.text().strip()
         if not raw:
             self._show_error("Please choose an output file path.")
@@ -507,6 +560,8 @@ class ExportDialog(QDialog):
             focus_depth=self._motion.focus_depth,
             fmt=self._fmt,
             output_path=output_path,
+            use_gpu=self._use_gpu,
+            use_nvenc=self._use_nvenc,
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)

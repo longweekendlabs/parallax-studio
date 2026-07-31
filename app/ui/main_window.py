@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from PySide6.QtCore import QElapsedTimer, Qt, QTimer, QRectF, QPointF, QSize
+from PySide6.QtCore import QElapsedTimer, Qt, QTimer, QRectF, QPointF, QSize, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetricsF, QImage, QKeySequence, QPainter, QBrush, QLinearGradient, QPen, QPolygonF
 from PySide6.QtWidgets import (
-    QFileDialog,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStatusBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 from app.core.animator import loop_phase
 from app.core.compositor import composite_animated_layers, composite_layers
 from app.core.depth import (
+    auto_depth,
     blur_depth,
     clear_depth,
     depth_to_qimage,
@@ -33,8 +35,12 @@ from app.core.depth import (
 from app.core.layer import Layer, is_supported_image, load_layer
 from app.core.project import ProjectSerializer
 from app.ui.canvas import CanvasPanel
+from app.ui.about_dialog import AboutDialog
 from app.ui.controls import BrushSettings, ControlsPanel, MotionSettings
+from app.ui.help_dialog import QuickHelpDialog
 from app.ui.layer_panel import LayerPanel
+from app.ui.settings_dialog import SettingsDialog
+from app.ui.shortcuts_dialog import ShortcutsDialog
 from app.ui.theme import (
     C_ACCENT,
     C_BORDER,
@@ -49,7 +55,9 @@ from app.ui.theme import (
 )
 from app.ui.export_dialog import ExportDialog
 from app.ui.timeline import TimelineStrip
+from app.version import __app_name__, __version__
 from app.utils.paths import ensure_app_dirs
+from app.utils.file_dialogs import open_images, open_project_or_image, save_project
 from app.utils.settings import AppSettings, load_settings, save_settings
 from app.utils.status import StatusController, StatusLevel, StatusMessage
 
@@ -93,7 +101,11 @@ class BrandWidget(QWidget):
         brand_font.setWeight(QFont.Weight.Medium)
         title_metrics = QFontMetricsF(title_font)
         brand_metrics = QFontMetricsF(brand_font)
-        width = int(title_metrics.horizontalAdvance("Parallax Studio") + 16 + brand_metrics.horizontalAdvance("by Long Weekend Labs"))
+        width = int(
+            title_metrics.horizontalAdvance(__app_name__)
+            + 16
+            + brand_metrics.horizontalAdvance(f"by Long Weekend Labs  v{__version__}")
+        )
         return QSize(width, 42)
 
     def minimumSizeHint(self):
@@ -114,24 +126,26 @@ class BrandWidget(QWidget):
 
         baseline_y = 26
         title_x = 0
-        brand_x = title_metrics.horizontalAdvance("Parallax Studio") + 16
+        brand_x = title_metrics.horizontalAdvance(__app_name__) + 16
 
         p.setFont(title_font)
         p.setPen(QColor(C_TEXT_MAIN))
-        p.drawText(QPointF(title_x, baseline_y), "Parallax Studio")
+        p.drawText(QPointF(title_x, baseline_y), __app_name__)
 
         p.setFont(brand_font)
         p.setPen(QColor(145, 161, 173, 165))
         brand_y = baseline_y - (title_metrics.ascent() - brand_metrics.ascent()) * 0.22
-        p.drawText(QPointF(brand_x, brand_y), "by Long Weekend Labs")
+        p.drawText(QPointF(brand_x, brand_y), f"by Long Weekend Labs  v{__version__}")
         p.end()
 
 
 class IconButton(QPushButton):
-    def __init__(self, icon: str, label: str, width: int = 108, parent=None):
+    def __init__(self, icon: str, label: str, width: int = 108, tooltip: str = "", parent=None):
         super().__init__(f"{icon}  {label}", parent)
         self.setFixedSize(width, 44)
         self.setCursor(Qt.PointingHandCursor)
+        if tooltip:
+            self.setToolTip(tooltip)
         self.setStyleSheet(
             f"""
             QPushButton {{
@@ -155,6 +169,7 @@ class PreviewButton(QPushButton):
         super().__init__("▶  Preview 24fps  ⌄", parent)
         self.setFixedSize(194, 44)
         self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Play the live parallax preview after the selected layer has painted depth variation")
         self.setStyleSheet(
             f"""
             QPushButton {{
@@ -177,6 +192,7 @@ class ExportButton(QPushButton):
         super().__init__("⇧  Export MP4", parent)
         self.setFixedSize(168, 44)
         self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Export the current parallax animation as MP4 or GIF")
         self.setObjectName("exportBtn")
         self.setStyleSheet(
             f"""
@@ -196,6 +212,11 @@ class ExportButton(QPushButton):
 
 
 class TopBar(QWidget):
+    aboutRequested = Signal()
+    helpRequested = Signal()
+    shortcutsRequested = Signal()
+    settingsRequested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(78)
@@ -213,22 +234,63 @@ class TopBar(QWidget):
         row.addWidget(BrandWidget())
 
         row.addStretch(1)
-        self.new_button = IconButton("⌘", "New", 96)
-        self.open_button = IconButton("▰", "Open", 104)
-        self.save_button = IconButton("▣", "Save", 100)
-        self.undo_button = IconButton("↶", "Undo", 106)
-        self.redo_button = IconButton("↷", "Redo", 106)
+        self.new_button = IconButton("⌘", "New", 96, "Start a new Parallax Studio project")
+        self.open_button = IconButton("▰", "Open", 104, "Open a .parlx project or import an image")
+        self.save_button = IconButton("▣", "Save", 100, "Save the current project as a .parlx file")
+        self.undo_button = IconButton("↶", "Undo", 106, "Undo the last depth paint or layer transform")
+        self.redo_button = IconButton("↷", "Redo", 106, "Redo the last undone depth paint or layer transform")
+        self.reset_button = IconButton("↺", "Reset", 112, "Clear the current scene and return to the welcome state")
         row.addWidget(self.new_button)
         row.addWidget(self.open_button)
         row.addWidget(self.save_button)
         row.addWidget(self.undo_button)
         row.addWidget(self.redo_button)
+        row.addWidget(self.reset_button)
         row.addStretch(2)
         self.preview_button = PreviewButton()
         row.addWidget(self.preview_button)
         row.addSpacing(8)
         self.export_button = ExportButton()
         row.addWidget(self.export_button)
+        row.addSpacing(4)
+        self.more_button = QToolButton()
+        self.more_button.setText("☰")
+        self.more_button.setToolTip("More options")
+        self.more_button.setFixedSize(38, 44)
+        self.more_button.setCursor(Qt.PointingHandCursor)
+        self.more_button.setStyleSheet(
+            f"""
+            QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                color: {C_TEXT_SECONDARY};
+                font-size: 20px;
+                font-weight: 700;
+            }}
+            QToolButton:hover {{
+                background: {C_RAISED_PANEL};
+                color: {C_TEXT_MAIN};
+            }}
+            """
+        )
+        self.more_button.clicked.connect(self._show_more_menu)
+        row.addWidget(self.more_button)
+
+    def _show_more_menu(self):
+        menu = QMenu(self)
+        menu.addAction("Settings...", self.settingsRequested.emit)
+        menu.addSeparator()
+        menu.addAction("Quick Help", self.helpRequested.emit)
+        menu.addAction("Keyboard Shortcuts", self.shortcutsRequested.emit)
+        menu.addSeparator()
+        menu.addAction("About Parallax Studio", self.aboutRequested.emit)
+        menu.addSeparator()
+        release_notes = menu.addAction("Release Notes")
+        release_notes.setEnabled(False)
+        updates = menu.addAction("Check for Updates")
+        updates.setEnabled(False)
+        menu.exec(self.more_button.mapToGlobal(self.more_button.rect().bottomRight()))
 
 
 class MainWindow(QMainWindow):
@@ -247,11 +309,22 @@ class MainWindow(QMainWindow):
         self._redo_actions: list[tuple] = []
         self._active_transform_before: tuple[str, int, int, float] | None = None
         self._preview_playing = True
+        self._paused_elapsed = 0.0
+        self._preview_user_paused = False
+        self._last_preview_ready = False
+        self._preview_paused_for_paint = False
+        self._depth_painting = False
         self._elapsed = QElapsedTimer()
         self._elapsed.start()
         self._preview_timer = QTimer(self)
         self._preview_timer.timeout.connect(self._tick_preview)
-        self.setWindowTitle("Parallax Studio")
+        # Slider drags emit valueChanged dozens of times a second. Rendering one
+        # frame per signal saturates the GUI thread, so repaints are coalesced
+        # onto this single-shot timer instead.
+        self._preview_refresh_timer = QTimer(self)
+        self._preview_refresh_timer.setSingleShot(True)
+        self._preview_refresh_timer.timeout.connect(self._render_preview_frame)
+        self.setWindowTitle(__app_name__)
         self.setMinimumSize(1280, 820)
         self.resize(self.settings.window_width, self.settings.window_height)
         self._build()
@@ -260,7 +333,7 @@ class MainWindow(QMainWindow):
         self._update_window_title()
 
     def _update_window_title(self):
-        title = "Parallax Studio"
+        title = f"{__app_name__} v{__version__}"
         if self.current_project_path:
             title += f" — {self.current_project_path.name}"
         else:
@@ -323,7 +396,8 @@ class MainWindow(QMainWindow):
         body.addWidget(self.controls)
 
         root.addLayout(body, stretch=1)
-        root.addWidget(TimelineStrip())
+        self.timeline = TimelineStrip()
+        self.timeline.hide()
 
         status_bar = QStatusBar()
         status_bar.setFixedHeight(24)
@@ -343,10 +417,13 @@ class MainWindow(QMainWindow):
         self.canvas.imageFilesDropped.connect(self._handle_dropped_images)
         self.canvas.unsupportedFilesDropped.connect(self._handle_unsupported_drop)
         self.canvas.depthPaintRequested.connect(self._paint_selected_depth)
+        self.canvas.depthPaintFinished.connect(self._finish_depth_paint)
         self.canvas.layerMoveRequested.connect(self._move_selected_layer)
         self.canvas.layerResizeRequested.connect(self._resize_selected_layer)
         self.canvas.layerTransformStarted.connect(self._begin_transform_edit)
         self.canvas.layerTransformFinished.connect(self._finish_transform_edit)
+        self.timeline.playRequested.connect(lambda: self._set_preview_playing(True))
+        self.timeline.pauseRequested.connect(lambda: self._set_preview_playing(False))
         self.layer_panel.addLayerRequested.connect(self._add_layers_from_picker)
         self.layer_panel.layerSelected.connect(self._select_layer)
         self.layer_panel.layerRemoveRequested.connect(self._remove_layer)
@@ -360,8 +437,16 @@ class MainWindow(QMainWindow):
         self.controls.clearDepthRequested.connect(self._clear_selected_depth)
         self.controls.invertDepthRequested.connect(self._invert_selected_depth)
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
-        self.controls.autoDepthRequested.connect(self._auto_depth_placeholder)
-        self.canvas.set_brush_preview(self.brush_settings.size, self.brush_settings.opacity)
+        self.controls.autoDepthRequested.connect(self._auto_depth_selected)
+        self.canvas.set_brush_preview(
+            self.brush_settings.size,
+            self.brush_settings.opacity,
+            self.brush_settings.erase,
+            self.brush_settings.hardness,
+            self.brush_settings.depth_value,
+        )
+        self.timeline.set_time(0.0, 0.0)
+        self._sync_preview_readiness()
         self._start_preview_timer()
 
     def _build_actions(self):
@@ -393,6 +478,7 @@ class MainWindow(QMainWindow):
         self.add_layers_action.triggered.connect(self._add_layers_from_picker)
 
         self.export_action = QAction("Export MP4...", self)
+        self.export_action.setShortcut(QKeySequence("Ctrl+E"))
         self.export_action.triggered.connect(self._export_project)
 
         self.undo_action = QAction("Undo", self)
@@ -402,6 +488,17 @@ class MainWindow(QMainWindow):
         self.redo_action = QAction("Redo", self)
         self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.redo_action.triggered.connect(self._redo_selected_depth)
+
+        self.reset_action = QAction("Reset Project", self)
+        self.reset_action.triggered.connect(self._new_project)
+
+        self.help_action = QAction("Quick Help", self)
+        self.help_action.setShortcut(QKeySequence("F1"))
+        self.help_action.triggered.connect(self._show_help_dialog)
+
+        self.shortcuts_action = QAction("Keyboard Shortcuts", self)
+        self.shortcuts_action.setShortcut(QKeySequence("Ctrl+/"))
+        self.shortcuts_action.triggered.connect(self._show_shortcuts_dialog)
 
         for action in [
             self.new_action,
@@ -419,6 +516,9 @@ class MainWindow(QMainWindow):
             self.export_action,
             self.undo_action,
             self.redo_action,
+            self.reset_action,
+            self.help_action,
+            self.shortcuts_action,
         ]:
             file_menu.addAction(action)
 
@@ -427,8 +527,13 @@ class MainWindow(QMainWindow):
         self.top_bar.save_button.clicked.connect(self.save_action.trigger)
         self.top_bar.undo_button.clicked.connect(self.undo_action.trigger)
         self.top_bar.redo_button.clicked.connect(self.redo_action.trigger)
+        self.top_bar.reset_button.clicked.connect(self.reset_action.trigger)
         self.top_bar.export_button.clicked.connect(self.export_action.trigger)
         self.top_bar.preview_button.clicked.connect(self._toggle_preview)
+        self.top_bar.aboutRequested.connect(self._show_about_dialog)
+        self.top_bar.helpRequested.connect(self._show_help_dialog)
+        self.top_bar.shortcutsRequested.connect(self._show_shortcuts_dialog)
+        self.top_bar.settingsRequested.connect(self._show_settings_dialog)
         self.addActions([
             self.new_action,
             self.open_action,
@@ -438,6 +543,9 @@ class MainWindow(QMainWindow):
             self.export_action,
             self.undo_action,
             self.redo_action,
+            self.reset_action,
+            self.help_action,
+            self.shortcuts_action,
         ])
 
         # Keep the approved custom top bar visually dominant during the shell phase.
@@ -446,6 +554,23 @@ class MainWindow(QMainWindow):
     def _connect_status(self):
         self.status_controller.changed.connect(self._show_status)
         self.status_controller.info("Ready  ·  No project loaded")
+
+    def _show_about_dialog(self):
+        AboutDialog(self).exec()
+
+    def _show_help_dialog(self):
+        QuickHelpDialog(self).exec()
+
+    def _show_shortcuts_dialog(self):
+        ShortcutsDialog(self).exec()
+
+    def _show_settings_dialog(self):
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.settings = dialog.result_settings()
+        save_settings(self.settings)
+        self.status_controller.info("Settings saved")
 
     def _show_status(self, message: StatusMessage):
         prefix = {
@@ -463,17 +588,16 @@ class MainWindow(QMainWindow):
         self._redo_actions.clear()
         self._active_transform_before = None
         self._last_paint_point = None
+        self._preview_user_paused = False
+        self._last_preview_ready = False
+        self._depth_painting = False
+        self._preview_paused_for_paint = False
         self._refresh_layers()
         self._update_window_title()
         self.status_controller.info("New project ready")
 
     def _open_project(self):
-        path, selected_filter = QFileDialog.getOpenFileName(
-            self,
-            "Open Project or Image",
-            self.settings.last_open_dir,
-            "All Supported (*.parlx *.png *.jpg *.jpeg *.webp);;Parallax Project (*.parlx);;Images (*.png *.jpg *.jpeg *.webp)",
-        )
+        path = open_project_or_image(self, "Open Project or Image", self.settings.last_open_dir)
         if path:
             file_path = Path(path)
             if file_path.suffix.lower() == ".parlx":
@@ -517,12 +641,7 @@ class MainWindow(QMainWindow):
             self.status_controller.error(f"Failed to save project: {str(e)}")
 
     def _save_project_as(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Project As",
-            self.settings.last_open_dir,
-            "Parallax Studio Projects (*.parlx)",
-        )
+        path = save_project(self, "Save Project As", self.settings.last_open_dir)
         if not path:
             return
 
@@ -548,6 +667,8 @@ class MainWindow(QMainWindow):
             self.motion_settings,
             last_export_dir=self.settings.last_export_dir,
             parent=self,
+            use_gpu=self.settings.gpu_export,
+            use_nvenc=self.settings.gpu_encode,
         )
         dlg.exportCompleted.connect(self._on_export_completed)
         dlg.exec()
@@ -564,12 +685,28 @@ class MainWindow(QMainWindow):
         self.status_controller.info(f"Exported: {Path(output_path).name}")
 
     def _toggle_preview(self):
-        self._preview_playing = not self._preview_playing
-        if self._preview_playing:
+        self._set_preview_playing(not self._preview_playing)
+
+    def _set_preview_playing(self, playing: bool, user_initiated: bool = True):
+        if user_initiated:
+            self._preview_user_paused = not playing
+        if playing and not self._motion_preview_ready():
+            self._preview_playing = False
+            self._preview_timer.stop()
+            self._sync_preview_readiness()
+            self.status_controller.warning("Paint depth before previewing parallax motion")
+            return
+
+        self._preview_playing = playing
+        self._sync_preview_readiness()
+        if playing:
             self._elapsed.restart()
             self._start_preview_timer()
             self.status_controller.info("Preview playing")
         else:
+            # Freeze the phase so tweaking sliders while paused re-renders the
+            # frame the user is looking at instead of jumping along the loop.
+            self._paused_elapsed = self._elapsed.elapsed() / 1000
             self._preview_timer.stop()
             self._refresh_layers(refresh_panel=False)
             self.status_controller.info("Preview paused")
@@ -583,12 +720,7 @@ class MainWindow(QMainWindow):
         self.status_controller.warning(f"Ignored {count} unsupported dropped {noun}")
 
     def _add_layers_from_picker(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Add Image Layers",
-            self.settings.last_open_dir,
-            "Images (*.png *.jpg *.jpeg *.webp)",
-        )
+        files = open_images(self, "Add Image Layers", self.settings.last_open_dir)
         if files:
             self.settings.last_open_dir = str(Path(files[0]).parent)
             self._import_image_paths(files)
@@ -638,7 +770,7 @@ class MainWindow(QMainWindow):
             noun = "layer" if count == 1 else "layers"
             self.status_controller.info(f"Imported {count} {noun}")
 
-    def _refresh_layers(self, refresh_panel: bool = True):
+    def _refresh_layers(self, refresh_panel: bool = True, update_preview: bool = True):
         if self.layers and self.selected_layer_id not in {layer.id for layer in self.layers}:
             self.selected_layer_id = self.layers[-1].id
 
@@ -656,6 +788,9 @@ class MainWindow(QMainWindow):
             selected_layer.name if selected_layer else "",
         )
         self.canvas.set_depth_overlay(self._depth_overlay_for_selected(composite, selected_layer))
+        duration = selected_layer.duration if selected_layer is not None else self.motion_settings.duration
+        self.timeline.set_time(0.0, duration if self.layers else 0.0)
+        self._sync_preview_readiness()
         # Push selection bounding box to canvas for move/resize handles
         if selected_visible and composite is not None:
             offset = self._composite_layer_offset(composite, selected_layer)
@@ -671,13 +806,50 @@ class MainWindow(QMainWindow):
                 self.canvas.set_selected_layer_bounds(None)
         else:
             self.canvas.set_selected_layer_bounds(None)
-        if self._preview_playing:
+        if update_preview and self._preview_playing:
             self._tick_preview()
 
     def _selected_layer(self) -> Layer | None:
         if self.selected_layer_id is None:
             return None
         return next((layer for layer in self.layers if layer.id == self.selected_layer_id), None)
+
+    @staticmethod
+    def _layer_has_depth_motion(layer: Layer | None) -> bool:
+        if layer is None or layer.depth_map is None:
+            return False
+        try:
+            return float(layer.depth_map.max() - layer.depth_map.min()) > 0.005
+        except ValueError:
+            return False
+
+    def _motion_preview_ready(self) -> bool:
+        selected = self._selected_layer()
+        return selected is not None and selected.visible and self._layer_has_depth_motion(selected)
+
+    def _sync_preview_readiness(self):
+        has_layer = bool(self.layers)
+        ready = self._motion_preview_ready()
+        self.controls.set_motion_ready(has_layer, ready)
+        self.timeline.set_preview_ready(ready)
+
+        if ready and not self._last_preview_ready and not self._preview_user_paused and not self._depth_painting:
+            self._preview_playing = True
+            self._elapsed.restart()
+            self._start_preview_timer()
+
+        self.timeline.set_playing(self._preview_playing if ready else False)
+        self.top_bar.preview_button.setEnabled(ready)
+        self.top_bar.preview_button.setToolTip(
+            "Play or pause the live parallax preview for the selected layer depth map."
+            if ready
+            else "Preview is disabled because the selected layer has flat depth. Paint gentle depth variation first."
+        )
+        self.top_bar.preview_button.setText("Pause Preview" if ready and self._preview_playing else "Play Preview")
+        if not ready and self._preview_playing:
+            self._preview_playing = False
+            self._preview_timer.stop()
+        self._last_preview_ready = ready
 
     def _layer_index(self, layer_id: str) -> int | None:
         for index, layer in enumerate(self.layers):
@@ -875,9 +1047,16 @@ class MainWindow(QMainWindow):
 
     def _set_brush_settings(self, settings: BrushSettings):
         self.brush_settings = settings
-        self.canvas.set_brush_preview(settings.size, settings.opacity)
+        self.canvas.set_brush_preview(
+            settings.size,
+            settings.opacity,
+            settings.erase,
+            settings.hardness,
+            settings.depth_value,
+        )
 
     def _set_motion_settings(self, settings: MotionSettings):
+        fps_changed = settings.preview_fps != self.motion_settings.preview_fps
         self.motion_settings = settings
         selected = self._selected_layer()
         if selected is not None:
@@ -890,24 +1069,48 @@ class MainWindow(QMainWindow):
             selected.global_intensity = settings.global_intensity
             selected.duration = settings.duration
             selected.loop_type = settings.loop_type
-        self._start_preview_timer()
-        self._tick_preview()
+        # Restarting the timer on every slider step kept postponing the tick it
+        # was meant to drive, so only touch it when the rate itself changed.
+        if fps_changed:
+            self._start_preview_timer()
+        self._request_preview_refresh()
 
     def _start_preview_timer(self):
         interval = max(1, int(1000 / max(1, self.motion_settings.preview_fps)))
         self._preview_timer.start(interval)
 
+    def _request_preview_refresh(self):
+        """Ask for one repaint soon, collapsing bursts of setting changes.
+
+        While the preview is playing its own timer already repaints at the
+        preview frame rate, so no extra work is scheduled at all.
+        """
+        if self._preview_playing:
+            return
+        if not self._preview_refresh_timer.isActive():
+            self._preview_refresh_timer.start(16)
+
     def _tick_preview(self):
-        if not self.layers or not self._preview_playing:
+        if not self._preview_playing:
+            return
+        self._render_preview_frame()
+
+    def _render_preview_frame(self):
+        if not self.layers:
             return
         sel = self._selected_layer() or self.layers[0]
+        elapsed = self._elapsed.elapsed() / 1000 if self._preview_playing else self._paused_elapsed
         phase = loop_phase(
-            self._elapsed.elapsed() / 1000,
+            elapsed,
             sel.duration,
             1.0,
             sel.loop_type,
         )
-        amplitude = 20.0
+        visible_layers = [l for l in self.layers if l.visible and not l.image.isNull()]
+        orig_w = max((l.image.width() for l in visible_layers), default=800)
+        orig_h = max((l.image.height() for l in visible_layers), default=600)
+        amplitude = max(60.0, max(orig_w, orig_h) * 0.06)
+
         frame = composite_animated_layers(
             self.layers,
             phase,
@@ -919,6 +1122,7 @@ class MainWindow(QMainWindow):
         selected_layer = self._selected_layer()
         self.canvas.set_composite(frame, selected_layer.name if selected_layer else "")
         self.canvas.set_depth_overlay(self._depth_overlay_for_selected(frame, selected_layer))
+        self.timeline.set_time(elapsed % max(0.001, sel.duration), sel.duration)
 
     def _composite_layer_offset(self, composite: QImage | None, layer: Layer) -> tuple[int, int] | None:
         if composite is None:
@@ -969,6 +1173,10 @@ class MainWindow(QMainWindow):
         if layer_x < 0 or layer_y < 0 or layer_x >= layer.image.width() or layer_y >= layer.image.height():
             return
         if begin_stroke:
+            self._depth_painting = True
+            if self._preview_playing:
+                self._preview_paused_for_paint = True
+                self._preview_timer.stop()
             push_depth_undo(layer)
             self._record_depth_action(layer)
             self._last_paint_point = None
@@ -991,17 +1199,37 @@ class MainWindow(QMainWindow):
             ]
 
         for x, y in points:
+            erase_mode = self.brush_settings.erase
             paint_depth(
                 layer,
                 x,
                 y,
                 self.brush_settings.size,
-                self.brush_settings.depth_value,
+                0.5 if erase_mode else self.brush_settings.depth_value,
                 self.brush_settings.hardness,
-                self.brush_settings.opacity,
+                max(0.55, self.brush_settings.opacity) if erase_mode else self.brush_settings.opacity,
             )
         self._last_paint_point = (layer_x, layer_y)
-        self._refresh_layers(refresh_panel=False)
+        self._refresh_layers(refresh_panel=False, update_preview=False)
+
+    def _finish_depth_paint(self):
+        self._last_paint_point = None
+        self._depth_painting = False
+        if self._preview_paused_for_paint and self._motion_preview_ready():
+            self._preview_paused_for_paint = False
+            self._elapsed.restart()
+            self._start_preview_timer()
+            self._tick_preview()
+            return
+        if self._motion_preview_ready() and not self._preview_user_paused:
+            self._preview_playing = True
+            self._preview_paused_for_paint = False
+            self._elapsed.restart()
+            self._start_preview_timer()
+            self._tick_preview()
+            self._sync_preview_readiness()
+            return
+        self._preview_paused_for_paint = False
 
     def _move_selected_layer(self, dx: int, dy: int):
         layer = self._selected_layer()
@@ -1088,7 +1316,7 @@ class MainWindow(QMainWindow):
         blur_depth(layer)
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
-        self.status_controller.info(f"Blurred depth for {layer.name}")
+        self.status_controller.info(f"Softened depth once for {layer.name}")
 
     def _undo_selected_depth(self):
         if self._undo_actions:
@@ -1150,8 +1378,15 @@ class MainWindow(QMainWindow):
             self._refresh_layers(refresh_panel=False)
             self.status_controller.info("Redid depth edit")
 
-    def _auto_depth_placeholder(self):
-        self.status_controller.info("Auto Depth is reserved for Phase 7; manual painting is active")
+    def _auto_depth_selected(self):
+        layer = self._selected_layer()
+        if layer is None:
+            self.status_controller.warning("Select a layer before generating depth")
+            return
+        auto_depth(layer)
+        self._record_depth_action(layer)
+        self._refresh_layers(refresh_panel=False)
+        self.status_controller.info(f"Generated starter depth for {layer.name}")
 
     def closeEvent(self, event):
         size = self.size()

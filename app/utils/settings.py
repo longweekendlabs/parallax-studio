@@ -13,6 +13,10 @@ class AppSettings:
     last_export_dir: str = ""
     window_width: int = 1448
     window_height: int = 1086
+    # Off by default: GPU export needs an optional PyTorch install that is not
+    # bundled, and the CPU renderer produces the same frames either way.
+    gpu_export: bool = False
+    gpu_encode: bool = True
 
 
 def load_settings(path: Path | None = None) -> AppSettings:
