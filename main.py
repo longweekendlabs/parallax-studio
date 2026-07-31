@@ -4,8 +4,11 @@ import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
+from app.version import __app_name__, __org_name__, __version__
 from app.ui.main_window import MainWindow
 from app.ui.theme import QSS
+from app.utils.resources import resource_path
 
 
 def _warn(title: str, body: str, detail: str = "") -> None:
@@ -23,12 +26,12 @@ def _check_environment() -> bool:
     Runs before the main window is created.
     Returns False only if the problem is fatal and the app cannot start.
     """
-    # Apple Silicon guard — only relevant when running from source on an Intel Mac.
-    # The bundled .app is arm64-only so macOS enforces this automatically there.
-    if platform.machine() not in ("arm64", ""):
+    # Apple Silicon guard is only relevant on macOS source runs. Linux and
+    # Windows builds are supported on their native architectures.
+    if sys.platform == "darwin" and platform.machine() not in ("arm64", ""):
         _warn(
             "Unsupported Architecture",
-            "Parallax Studio is built for Apple Silicon (M1 / M2 / M3 / M4).",
+            "Parallax Studio macOS release builds target Apple Silicon (M1 / M2 / M3 / M4).",
             f"This machine reports: {platform.machine()}\n\n"
             "The app may not work correctly.",
         )
@@ -58,8 +61,11 @@ def _check_environment() -> bool:
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Parallax Studio")
-    app.setOrganizationName("Long Weekend Labs")
+    app.setApplicationName(__app_name__)
+    app.setApplicationVersion(__version__)
+    app.setOrganizationName(__org_name__)
+    app.setDesktopFileName("com.longweekendlabs.parallaxstudio")
+    app.setWindowIcon(QIcon(str(resource_path("assets", "icons", "parallax-studio.png"))))
     app.setStyle("Fusion")
     app.setStyleSheet(QSS)
 

@@ -1,6 +1,6 @@
 # Parallax Studio Requirements
-# Target: macOS Apple Silicon (arm64)
-# Python 3.11+
+# Target: macOS Apple Silicon and Linux
+# Python 3.11-3.13 recommended for the pinned dependency set
 
 # UI Framework
 PySide6==6.11.0
@@ -12,5 +12,11 @@ Pillow==11.1.0
 
 # Video & Animation Export
 imageio[ffmpeg]==2.37.0
-# Note: ffmpeg should also be installed via Homebrew for development
-# brew install ffmpeg
+# imageio-ffmpeg provides the bundled encoder used for local builds.
+
+# Optional: GPU-accelerated export (NVIDIA only, dev machines).
+# Not installed by default and never bundled into builds: it pulls ~4GB of
+# CUDA runtime. Without it, export runs on the CPU renderer with identical
+# output. To enable on a CUDA machine:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# A system ffmpeg built with h264_nvenc additionally enables GPU encoding.

@@ -35,6 +35,40 @@ QMainWindow {{
     background-color: {C_WINDOW_BG};
 }}
 
+QToolTip {{
+    background-color: #101923;
+    border: 1px solid {C_BORDER};
+    border-radius: 6px;
+    color: {C_TEXT_MAIN};
+    padding: 6px 8px;
+    font-size: 12px;
+}}
+
+QMenu {{
+    background-color: #0D141B;
+    border: 1px solid {C_BORDER};
+    border-radius: 6px;
+    color: {C_TEXT_MAIN};
+    padding: 6px;
+}}
+QMenu::item {{
+    background: transparent;
+    border-radius: 5px;
+    padding: 7px 28px 7px 12px;
+}}
+QMenu::item:selected {{
+    background: {C_ACCENT}22;
+    color: {C_ACCENT};
+}}
+QMenu::item:disabled {{
+    color: {C_TEXT_MUTED};
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {C_BORDER};
+    margin: 6px 4px;
+}}
+
 /* ── Scroll bars ── */
 QScrollBar:vertical {{
     background: {C_PANEL_BG};

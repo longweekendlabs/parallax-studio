@@ -1,8 +1,7 @@
-# Runtime hook — runs before any app code inside the bundled .app.
+# Runtime hook — runs before any app code inside the bundled app.
 #
-# In a PyInstaller macOS .app bundle, data files classified as "binary"
-# (executables) land in Contents/Frameworks/, while the importlib.resources
-# lookup inside imageio_ffmpeg would look in Contents/Resources/.
+# In a PyInstaller bundle, executable data files can land somewhere other than
+# the path importlib.resources expects.
 #
 # We search both locations and explicitly set IMAGEIO_FFMPEG_EXE so that
 # imageio_ffmpeg.get_ffmpeg_exe() uses the right path regardless of how
@@ -14,7 +13,8 @@ import sys
 
 
 def _find_bundle_ffmpeg() -> str | None:
-    # sys.executable = .../Contents/MacOS/Parallax Studio
+    # macOS .app: .../Contents/MacOS/Parallax Studio
+    # Linux one-dir: .../parallax-studio/parallax-studio
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     contents_dir = os.path.dirname(exe_dir)
 

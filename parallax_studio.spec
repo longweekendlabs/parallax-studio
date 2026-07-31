@@ -7,12 +7,13 @@ from PyInstaller.utils.hooks import collect_data_files
 # imageio_ffmpeg bundles its own ARM64 ffmpeg binary; collect it explicitly
 # so it lands at {_MEIPASS}/imageio_ffmpeg/binaries/ where the library expects it.
 imageio_ffmpeg_datas = collect_data_files("imageio_ffmpeg")
+asset_datas = [("assets", "assets")]
 
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=imageio_ffmpeg_datas,
+    datas=imageio_ffmpeg_datas + asset_datas,
     hiddenimports=[
         # OpenCV — compiled extension, not always auto-detected
         "cv2",
@@ -70,6 +71,14 @@ a = Analysis(
         "PySide6.QtWebEngineWidgets",
         "PySide6.QtWebSockets",
         "PySide6.QtXml",
+        # PyTorch is an optional dev-machine accelerator for export (see
+        # app/core/exporter.py). It pulls ~4GB of CUDA runtime, so it is never
+        # shipped: the packaged app falls back to the CPU renderer.
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "nvidia",
+        "triton",
     ],
     noarchive=False,
 )
@@ -109,11 +118,11 @@ app = BUNDLE(
     name="Parallax Studio.app",
     icon=None,           # Phase 9: add assets/icons/app.icns
     bundle_identifier="com.longweekendlabs.parallaxstudio",
-    version="0.1.1",
+    version="0.3.0",
     info_plist={
         "CFBundleDisplayName": "Parallax Studio",
-        "CFBundleVersion": "0.1.1",
-        "CFBundleShortVersionString": "0.1.1",
+        "CFBundleVersion": "0.3.0",
+        "CFBundleShortVersionString": "0.3.0",
         "NSPrincipalClass": "NSApplication",
         "NSAppleScriptEnabled": False,
         "NSHighResolutionCapable": True,
