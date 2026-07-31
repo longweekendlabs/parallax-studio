@@ -10,6 +10,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
+from app.utils.resources import system_env
+
 
 IMAGE_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.webp"]
 PROJECT_PATTERNS = ["*.parlx"]
@@ -58,6 +60,7 @@ def _run_dialog(args: list[str]) -> list[str] | None:
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,
+            env=system_env(),
         )
     except OSError:
         return None
@@ -90,6 +93,8 @@ def _kdialog_save(title: str, start: str, patterns: list[str]) -> str | None:
         return None
     args = [exe, "--title", title, "--getsavefilename", _start_path(start), " ".join(patterns)]
     paths = _run_dialog(args)
+    if paths is None:
+        return None
     return paths[0] if paths else ""
 
 
@@ -122,6 +127,8 @@ def _zenity_save(title: str, start: str, patterns: list[str]) -> str | None:
         f"--file-filter=Supported files | {' '.join(patterns)}",
     ]
     paths = _run_dialog(args)
+    if paths is None:
+        return None
     return paths[0] if paths else ""
 
 

@@ -215,15 +215,31 @@ class ExportDialog(QDialog):
         )
         header_row.addWidget(title)
 
-        if is_cuda_available() or is_nvenc_available():
-            cuda_badge = QLabel("⚡ CUDA GPU Active")
-            cuda_badge.setStyleSheet(
+        # Report only what this export will really use, not what the machine
+        # could theoretically do. Enabling GPU work lives in Settings.
+        gpu_render = self._use_gpu and is_cuda_available()
+        gpu_encode = self._use_nvenc and is_nvenc_available()
+        if gpu_render or gpu_encode:
+            parts = []
+            if gpu_render:
+                parts.append("render")
+            if gpu_encode:
+                parts.append("encode")
+            badge = QLabel(f"GPU: {' + '.join(parts)}")
+            badge.setStyleSheet(
                 f"background: #102A1E; color: #4ADE80; border: 1px solid #166534; "
                 f"border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 600;"
             )
-            cuda_badge.setToolTip("CUDA GPU acceleration is active for fast rendering and hardware NVENC video encoding.")
-            header_row.addStretch()
-            header_row.addWidget(cuda_badge)
+            badge.setToolTip("Hardware acceleration enabled for this export (see Settings).")
+        else:
+            badge = QLabel("CPU")
+            badge.setStyleSheet(
+                f"background: #1A222B; color: {C_TEXT_SECONDARY}; border: 1px solid {C_BORDER}; "
+                f"border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 600;"
+            )
+            badge.setToolTip("Rendering and encoding on the CPU. Enable GPU acceleration in Settings.")
+        header_row.addStretch()
+        header_row.addWidget(badge)
 
         layout.addLayout(header_row)
 

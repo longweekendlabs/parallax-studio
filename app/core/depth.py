@@ -130,7 +130,12 @@ def depth_to_qimage(depth: np.ndarray | None) -> QImage | None:
     clipped = np.clip(depth, 0.0, 1.0)
     delta = np.abs(clipped - 0.5) * 2.0
     near = clipped >= 0.5
-    alpha = np.where(delta > 0.01, np.clip(72 + np.sqrt(delta) * 163, 0, 235), 0).astype(np.uint8)
+    # Opacity tracks painted strength linearly. The old curve jumped straight to
+    # 72/255 for the faintest touch and then flattened, so a 10% stroke and a
+    # 100% stroke looked alike and soft brush edges read as hard ones.
+    alpha = np.clip(delta * 215.0, 0.0, 215.0)
+    alpha[delta < 0.02] = 0.0
+    alpha = alpha.astype(np.uint8)
     height, width = clipped.shape
     rgba = np.zeros((height, width, 4), dtype=np.uint8)
     rgba[:, :, 0] = np.where(near, 61, 166).astype(np.uint8)

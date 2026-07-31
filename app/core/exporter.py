@@ -17,6 +17,7 @@ from app.core.animator import motion_offset
 from app.core.compositor import composite_animated_layers
 from app.core.depth import ensure_depth_map
 from app.core.layer import Layer
+from app.utils.resources import system_env
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ def is_nvenc_available() -> bool:
             capture_output=True,
             text=True,
             check=False,
+            env=system_env(),
         )
         return "h264_nvenc" in res.stdout
     except Exception:
@@ -357,7 +359,7 @@ def export_mp4(
         cmd.extend(["-movflags", "+faststart", str(output_path)])
 
         logger.info("Encoding %d frames at %dx%d with %s", total, w, h, vcodec)
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=system_env())
         try:
             for i, frame in enumerate(frames):
                 even_f = _even_dims(frame)
