@@ -94,6 +94,18 @@ install -m 0644 com.longweekendlabs.parallaxstudio.desktop %{buildroot}/usr/shar
 mkdir -p %{buildroot}/usr/share/icons/hicolor/256x256/apps
 install -m 0644 parallax-studio/_internal/assets/icons/parallax-studio.png %{buildroot}/usr/share/icons/hicolor/256x256/apps/parallax-studio.png
 
+%post
+# Desktop environments cache icons aggressively; without this an upgrade that
+# changes the icon keeps showing the old one until the cache is rebuilt.
+touch --no-create /usr/share/icons/hicolor &>/dev/null || :
+gtk-update-icon-cache -q /usr/share/icons/hicolor &>/dev/null || :
+update-desktop-database -q /usr/share/applications &>/dev/null || :
+
+%postun
+touch --no-create /usr/share/icons/hicolor &>/dev/null || :
+gtk-update-icon-cache -q /usr/share/icons/hicolor &>/dev/null || :
+update-desktop-database -q /usr/share/applications &>/dev/null || :
+
 %files
 /opt/parallax-studio
 /usr/bin/parallax-studio

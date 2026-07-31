@@ -145,6 +145,11 @@ class SettingsDialog(QDialog):
 
     def result_settings(self) -> AppSettings:
         """Return the edited settings; call after exec() returns Accepted."""
-        self._settings.gpu_export = self.gpu_export_check.isChecked() and self._cuda
-        self._settings.gpu_encode = self.gpu_encode_check.isChecked() and self._nvenc
+        # A disabled control reflects missing hardware, not a user choice.
+        # Writing its unchecked state would silently turn the feature off for
+        # good once the hardware came back.
+        if self.gpu_export_check.isEnabled():
+            self._settings.gpu_export = self.gpu_export_check.isChecked()
+        if self.gpu_encode_check.isEnabled():
+            self._settings.gpu_encode = self.gpu_encode_check.isChecked()
         return self._settings
