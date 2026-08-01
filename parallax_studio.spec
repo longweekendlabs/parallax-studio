@@ -17,6 +17,9 @@ a = Analysis(
     hiddenimports=[
         # OpenCV — compiled extension, not always auto-detected
         "cv2",
+        # Depth Anything V2 inference; imported lazily in app/core/depth_model.py
+        "onnxruntime",
+        "onnxruntime.capi._pybind_state",
         # imageio backends
         "imageio.plugins.ffmpeg",
         "imageio_ffmpeg",
@@ -118,11 +121,11 @@ app = BUNDLE(
     name="Parallax Studio.app",
     icon=None,           # Phase 9: add assets/icons/app.icns
     bundle_identifier="com.longweekendlabs.parallaxstudio",
-    version="0.4.0",
+    version="0.5.0",
     info_plist={
         "CFBundleDisplayName": "Parallax Studio",
-        "CFBundleVersion": "0.4.0",
-        "CFBundleShortVersionString": "0.4.0",
+        "CFBundleVersion": "0.5.0",
+        "CFBundleShortVersionString": "0.5.0",
         "NSPrincipalClass": "NSApplication",
         "NSAppleScriptEnabled": False,
         "NSHighResolutionCapable": True,

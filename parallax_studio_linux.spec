@@ -15,6 +15,9 @@ a = Analysis(
     datas=imageio_ffmpeg_datas + asset_datas,
     hiddenimports=[
         "cv2",
+        # Depth Anything V2 inference; imported lazily in app/core/depth_model.py
+        "onnxruntime",
+        "onnxruntime.capi._pybind_state",
         "imageio.plugins.ffmpeg",
         "imageio_ffmpeg",
         "PIL.Image",

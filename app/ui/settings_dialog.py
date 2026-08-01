@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.core import depth_model
 from app.core.exporter import is_cuda_available, is_nvenc_available
 from app.ui.theme import (
     C_ACCENT,
@@ -104,6 +106,25 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_rule())
         layout.addSpacing(6)
+
+        layout.addWidget(_section("AUTO DEPTH MODEL"))
+        self.model_combo = QComboBox()
+        for model in depth_model.MODELS:
+            suffix = "" if depth_model.is_downloaded(model.id) or not model.filename else "  (not downloaded)"
+            self.model_combo.addItem(model.label + suffix, model.id)
+        index = self.model_combo.findData(self._settings.depth_model)
+        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.model_combo.currentIndexChanged.connect(self._sync_model_hint)
+        layout.addWidget(self.model_combo)
+        self.model_hint = _hint("")
+        layout.addWidget(self.model_hint)
+        if not depth_model.is_available():
+            self.model_combo.setEnabled(False)
+        self._sync_model_hint()
+
+        layout.addSpacing(6)
+        layout.addWidget(_rule())
+        layout.addSpacing(6)
         layout.addWidget(_hint(
             "Preview frame rate lives with the other motion controls in the "
             "right-hand panel."
@@ -136,6 +157,18 @@ class SettingsDialog(QDialog):
             "layers fall back to the CPU automatically."
         )
 
+    def _sync_model_hint(self):
+        model = depth_model.get_model(self.model_combo.currentData())
+        text = model.note
+        if not depth_model.is_available():
+            text = "Unavailable: ONNX Runtime is not installed in this build."
+        elif model.filename and not depth_model.is_downloaded(model.id):
+            size = model.approx_bytes // 1048576
+            text += f"  Downloads once ({size} MB) the first time you press Auto Depth."
+        if not model.commercial_ok:
+            text += f"  Licence: {model.license}, non-commercial use only."
+        self.model_hint.setText(text)
+
     def _encode_hint(self) -> str:
         if not self._nvenc:
             return "Unavailable: this system's ffmpeg has no h264_nvenc encoder."
@@ -152,4 +185,6 @@ class SettingsDialog(QDialog):
             self._settings.gpu_export = self.gpu_export_check.isChecked()
         if self.gpu_encode_check.isEnabled():
             self._settings.gpu_encode = self.gpu_encode_check.isChecked()
+        if self.model_combo.isEnabled():
+            self._settings.depth_model = self.model_combo.currentData()
         return self._settings

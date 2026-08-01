@@ -17,6 +17,8 @@ class AppSettings:
     # bundled, and the CPU renderer produces the same frames either way.
     gpu_export: bool = False
     gpu_encode: bool = True
+    # Depth model used by the Auto Depth button; see app/core/depth_model.py
+    depth_model: str = "dav2-small-fp16"
 
 
 def load_settings(path: Path | None = None) -> AppSettings:
