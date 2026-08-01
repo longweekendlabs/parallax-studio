@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -24,15 +23,6 @@ from app.ui.theme import (
     C_TEXT_MUTED,
     C_TEXT_SECONDARY,
 )
-
-
-def _speed_from_slider(value: int) -> float:
-    """Slider 0-100 -> 0.25x .. 3.00x. 27 is 1.00x, the concept default."""
-    return 0.25 + (value / 100.0) * 2.75
-
-
-def _slider_from_speed(speed: float) -> int:
-    return max(0, min(100, int(round((speed - 0.25) / 2.75 * 100))))
 
 
 def _label(text: str) -> QLabel:
@@ -68,10 +58,11 @@ def _set_tooltip_tree(widget: QWidget, text: str):
 
 @dataclass(frozen=True)
 class BrushSettings:
-    # Matches the concept image and the slider defaults in ControlsPanel.
     size: int = 128
-    depth_value: float = 0.45
-    hardness: float = 0.65
+    depth_value: float = 0.62
+    hardness: float = 0.18
+    # Depthy defaults its brush to 0.25; 0.10 moved depth so little per pass
+    # that strokes were invisible in the paint overlay.
     opacity: float = 1.0
     erase: bool = False
 
@@ -446,82 +437,9 @@ class SimpleSliderRow(QWidget):
     def value(self) -> int:
         return self.slider.value()
 
-    def set_value(self, value: int, emit: bool = False):
-        self.slider.blockSignals(not emit)
-        self.slider.setValue(int(value))
-        self.slider.blockSignals(False)
-        # blockSignals suppresses _update_value, so refresh the readout here.
-        self.value_label.setText(self.formatter(self.slider.value()))
-
     def _update_value(self, value: int):
         self.value_label.setText(self.formatter(value))
         self.valueChanged.emit()
-
-
-class DropdownRow(QWidget):
-    """Label on the left, dark dropdown on the right, as in the concept."""
-
-    changed = Signal()
-
-    def __init__(self, label: str, choices: list[tuple[str, object]], index: int = 0, parent=None):
-        super().__init__(parent)
-        self.setStyleSheet("background: transparent;")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(10)
-        row.addWidget(_label(label))
-        row.addStretch()
-
-        self.combo = QComboBox()
-        self.combo.setFixedHeight(30)
-        self.combo.setMinimumWidth(148)
-        self.combo.setCursor(Qt.PointingHandCursor)
-        for text, payload in choices:
-            self.combo.addItem(text, payload)
-        self.combo.setCurrentIndex(index)
-        self.combo.setStyleSheet(
-            f"""
-            QComboBox {{
-                background: #0D141B;
-                border: 1px solid {C_BORDER};
-                border-radius: 7px;
-                color: {C_TEXT_MAIN};
-                font-size: 13px;
-                padding: 4px 10px;
-            }}
-            QComboBox:hover {{ border-color: {C_ACCENT}; }}
-            QComboBox::drop-down {{ border: none; width: 22px; }}
-            QComboBox QAbstractItemView {{
-                background: #0D141B;
-                border: 1px solid {C_BORDER};
-                color: {C_TEXT_MAIN};
-                selection-background-color: {C_ACCENT};
-                selection-color: #06231F;
-                outline: none;
-            }}
-            """
-        )
-        self.combo.currentIndexChanged.connect(lambda _i: self.changed.emit())
-        row.addWidget(self.combo)
-
-    def value(self):
-        return self.combo.currentData()
-
-    def set_value(self, payload, emit: bool = False):
-        # findData compares through QVariant and does not reliably match Python
-        # tuples, so compare the stored payloads directly.
-        index = -1
-        for i in range(self.combo.count()):
-            if self.combo.itemData(i) == payload:
-                index = i
-                break
-        if index < 0:
-            return
-        self.combo.blockSignals(not emit)
-        self.combo.setCurrentIndex(index)
-        self.combo.blockSignals(False)
-        if emit:
-            self.changed.emit()
 
 
 def _slider_row(label: str, value: int, display: str) -> QWidget:
@@ -677,19 +595,11 @@ class ControlsPanel(QWidget):
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(12)
 
-        # Not shown in the panel: focus stays neutral (the concept has no
-        # control for it) and preview fps lives with the other app preferences.
-        self._focus_depth = 0.5
-        self._preview_fps = 24
-
         depth = Card("⌁", "DEPTH BRUSH")
-        # Defaults come from the concept image (Size 128, Depth 0.45,
-        # Hardness 65%, Opacity 100%). The previous 10% strength moved depth so
-        # little per pass that strokes were invisible in the paint overlay.
         self.brush_size = SimpleSliderRow("Brush Size", 58, lambda v: str(max(4, int(v * 2.2))))
-        self.depth_value = SimpleSliderRow("Depth Value", 45, lambda v: f"{v / 100:.2f}")
-        self.hardness = SimpleSliderRow("Hardness", 65, lambda v: f"{v}%")
-        self.opacity = SimpleSliderRow("Opacity", 100, lambda v: f"{v}%")
+        self.depth_value = SimpleSliderRow("Depth Value", 62, lambda v: f"{v / 100:.2f}")
+        self.hardness = SimpleSliderRow("Hardness", 18, lambda v: f"{v}%")
+        self.opacity = SimpleSliderRow("Brush Strength", 100, lambda v: f"{v}%")
         _set_tooltip_tree(
             self.brush_size,
             "Width of each depth stroke. Use smaller strokes around object edges; reserve large strokes for broad foreground or background areas."
@@ -776,68 +686,100 @@ class ControlsPanel(QWidget):
             """
         )
         motion.layout.addWidget(self.motion_notice)
-        # The concept image defines exactly four motion controls: Motion Style,
-        # Loop Type, Layer Intensity and Speed. The panel had grown to nine
-        # rows, three of which (movement / layer / global) multiplied into a
-        # single number and produced pixel-identical output for any combination
-        # with the same product.
-        self.motion_style = DropdownRow(
-            "Motion Style",
-            [
-                ("Parallax Orbit", ("orbit", 1.0, 1.0, 0.35)),
-                ("Horizontal Drift", ("horizontal", 1.0, 0.0, 0.0)),
-                ("Vertical Drift", ("vertical", 0.0, 1.0, 0.0)),
-                ("Zoom Breathe", ("zoom", 0.35, 0.35, 0.9)),
-            ],
-            0,
+        self.movement_strength = RangeStepper(
+            "movement",
+            [("Still", 0.0), ("Calm", 0.5), ("Normal", 1.0), ("Dramatic", 2.0)],
+            2,
+            formatter=lambda value: f"{value:.2f}x",
+            magnetic_center=True,
         )
         _set_tooltip_tree(
-            self.motion_style,
-            "Shape of the camera move. Parallax Orbit combines side-to-side and vertical drift with a little push-in.",
+            self.movement_strength,
+            "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic."
         )
-        self.motion_style.changed.connect(self._emit_motion_settings)
-        motion.layout.addWidget(self.motion_style)
-
-        self.loop_type = DropdownRow(
-            "Loop Type",
-            [("Seamless Loop", "Seamless Loop"), ("Bounce", "Bounce")],
-            0,
+        self.focus_depth = RangeStepper(
+            "focus",
+            [("Near", 0.0), ("Middle", 0.5), ("Far", 1.0)],
+            1,
+            formatter=lambda value: f"{value:.2f}",
+            magnetic_center=True,
         )
         _set_tooltip_tree(
-            self.loop_type,
-            "Seamless wraps cleanly for export; Bounce moves out and back, which is easier for inspecting depth problems.",
+            self.focus_depth,
+            "Depth plane that stays most anchored. Near steadies foreground subjects; Far steadies the background."
         )
+        self.motion_path = RangeStepper(
+            "path",
+            [("Horizontal", (1.0, 0.0)), ("Circular", (1.0, 1.0)), ("Vertical", (0.0, 1.0))],
+            1,
+            path_preview=True,
+            magnetic_center=True,
+        )
+        _set_tooltip_tree(
+            self.motion_path,
+            "Direction of camera motion. Horizontal is easiest to judge; Circular combines side-to-side and vertical drift."
+        )
+        self.zoom_strength = SliderRow("zoom", 35, lambda v: f"{v / 100:.2f}", "Still", "Breathe", magnetic_center=True)
+        _set_tooltip_tree(
+            self.zoom_strength,
+            "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing."
+        )
+        self.zoom_strength.valueChanged.connect(self._emit_motion_settings)
+        for stepper in [self.movement_strength, self.focus_depth, self.motion_path]:
+            stepper.changed.connect(self._emit_motion_settings)
+            motion.layout.addWidget(stepper)
+        motion.layout.insertWidget(2, self.zoom_strength)
+        self.duration = SliderRow("duration", 43, lambda v: f"{1.0 + v / 100 * 7.0:.1f}s", "Short", "Long", magnetic_center=True)
+        _set_tooltip_tree(
+            self.duration,
+            "Length of one loop. Short loops feel faster; longer loops make the same motion calmer."
+        )
+        self.duration.valueChanged.connect(self._emit_motion_settings)
+        motion.layout.addWidget(self.duration)
+        motion.layout.addWidget(_label("Loop"))
+        self.loop_type = LoopButtons()
         self.loop_type.changed.connect(self._emit_motion_settings)
         motion.layout.addWidget(self.loop_type)
-
-        self.layer_intensity = SimpleSliderRow("Layer Intensity", 65, lambda v: f"{v / 100:.2f}")
+        self.layer_intensity = SliderRow("intensity", 65, lambda v: f"{v / 100:.2f}", "Subtle", "Strong", magnetic_center=True)
         _set_tooltip_tree(
             self.layer_intensity,
-            "How far the image travels. This is the single motion amount: the old movement, layer and global sliders all multiplied into this one value.",
+            "Motion multiplier for the selected layer only. Lower this if this image layer warps more than the rest of the scene."
         )
-        self.layer_intensity.valueChanged.connect(self._emit_motion_settings)
-        motion.layout.addWidget(self.layer_intensity)
-
-        self.speed = SimpleSliderRow("Speed", 27, lambda v: f"{_speed_from_slider(v):.2f}x")
+        for row in [self.layer_intensity]:
+            row.valueChanged.connect(self._emit_motion_settings)
+            motion.layout.addWidget(row)
+        self.preview_fps_row = RangeStepper(
+            "preview fps",
+            [("15", 15), ("24", 24), ("30", 30)],
+            1,
+            formatter=lambda value: f"{int(value)} fps",
+        )
         _set_tooltip_tree(
-            self.speed,
-            "Loop playback rate. 1.00x is a four second loop; higher is faster.",
+            self.preview_fps_row,
+            "Live preview playback rate while editing. This does not control exported video frame rate."
         )
-        self.speed.valueChanged.connect(self._emit_motion_settings)
-        motion.layout.addWidget(self.speed)
-
+        self.preview_fps_row.changed.connect(self._emit_motion_settings)
+        motion.layout.addWidget(self.preview_fps_row)
         col.addWidget(motion)
         self.motion_widgets = [
-            self.motion_style,
+            self.movement_strength,
+            self.focus_depth,
+            self.motion_path,
+            self.zoom_strength,
+            self.duration,
             self.loop_type,
             self.layer_intensity,
-            self.speed,
+            self.preview_fps_row,
         ]
         self.motion_tooltips = {
-            self.motion_style: "Shape of the camera move. Parallax Orbit combines side-to-side and vertical drift with a little push-in.",
+            self.movement_strength: "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic.",
+            self.focus_depth: "Depth plane that stays most anchored. Near steadies foreground subjects; Far steadies the background.",
+            self.motion_path: "Direction of camera motion. Horizontal is easiest to judge; Circular combines side-to-side and vertical drift.",
+            self.zoom_strength: "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing.",
+            self.duration: "Length of one loop. Short loops feel faster; longer loops make the same motion calmer.",
             self.loop_type: "Seamless wraps cleanly for export; Bounce moves out and back, which is easier for inspecting depth problems.",
-            self.layer_intensity: "How far the image travels. This is the single motion amount.",
-            self.speed: "Loop playback rate. 1.00x is a four second loop; higher is faster.",
+            self.layer_intensity: "Motion multiplier for the selected layer only. Lower this if this image layer warps more than the rest of the scene.",
+            self.preview_fps_row: "Live preview playback rate while editing. This does not control exported video frame rate.",
         }
 
         col.addStretch()
@@ -869,71 +811,44 @@ class ControlsPanel(QWidget):
         self._emit_brush_settings()
 
     def motion_settings(self) -> MotionSettings:
-        _name, scale_x, scale_y, zoom = self.motion_style.value()
-        speed = _speed_from_slider(self.speed.value())
+        scale_x, scale_y = self.motion_path.value()
         return MotionSettings(
             motion_scale_x=scale_x,
             motion_scale_y=scale_y,
-            zoom_strength=zoom,
+            zoom_strength=self.zoom_strength.value() / 100,
             loop_type=self.loop_type.value(),
-            # Movement and global were two more multipliers on the same number
-            # as layer intensity; they are pinned to 1.0 so the single Layer
-            # Intensity slider is the whole motion amount.
-            movement_strength=1.0,
-            focus_depth=self._focus_depth,
+            movement_strength=self.movement_strength.value(),
+            focus_depth=self.focus_depth.value(),
             layer_intensity=self.layer_intensity.value() / 100,
             global_intensity=1.0,
-            duration=4.0 / speed,
-            preview_fps=self._preview_fps,
+            duration=1.0 + self.duration.value() / 100 * 7.0,
+            preview_fps=int(self.preview_fps_row.value()),
         )
 
     def _emit_motion_settings(self):
         self.motionSettingsChanged.emit(self.motion_settings())
 
     def set_motion_settings(self, settings: MotionSettings):
-        self._focus_depth = settings.focus_depth
-        self._preview_fps = settings.preview_fps
-        self._apply_motion_values(
-            settings.motion_scale_x,
-            settings.motion_scale_y,
-            settings.zoom_strength,
-            settings.loop_type,
-            settings.movement_strength * settings.layer_intensity * settings.global_intensity,
-            settings.duration,
-        )
-
-    def _apply_motion_values(self, scale_x, scale_y, zoom, loop_type, amount, duration):
-        """Push stored values onto the four visible controls.
-
-        `amount` folds the three old multipliers into one, so projects saved
-        before the panel was simplified still preview at the same strength.
-        """
-        self.motion_style.set_value(self._closest_style(scale_x, scale_y, zoom), emit=False)
-        self.loop_type.set_value(loop_type, emit=False)
-        self.layer_intensity.set_value(max(0, min(100, int(round(amount * 100)))), emit=False)
-        speed = 4.0 / max(0.25, duration)
-        self.speed.set_value(_slider_from_speed(speed), emit=False)
-
-    def _closest_style(self, scale_x, scale_y, zoom):
-        best, best_dist = None, None
-        for index in range(self.motion_style.combo.count()):
-            payload = self.motion_style.combo.itemData(index)
-            _n, sx, sy, sz = payload
-            dist = (sx - scale_x) ** 2 + (sy - scale_y) ** 2 + (sz - zoom) ** 2
-            if best_dist is None or dist < best_dist:
-                best, best_dist = payload, dist
-        return best
+        self.movement_strength.set_value(settings.movement_strength, emit=False)
+        self.focus_depth.set_value(settings.focus_depth, emit=False)
+        self.motion_path.set_value((settings.motion_scale_x, settings.motion_scale_y), emit=False)
+        self.zoom_strength.setValue(max(0, min(100, int(round(settings.zoom_strength * 100)))), emit=False)
+        self.duration.setValue(max(0, min(100, int(round((settings.duration - 1.0) / 7.0 * 100)))), emit=False)
+        self.loop_type._value = settings.loop_type
+        self.loop_type._sync()
+        self.layer_intensity.setValue(max(0, min(100, int(round(settings.layer_intensity * 100)))), emit=False)
+        self.preview_fps_row.set_value(settings.preview_fps, emit=False)
 
     def set_selected_layer_motion(self, layer, locked: bool = False):
-        self._focus_depth = layer.focus_depth
-        self._apply_motion_values(
-            layer.motion_scale_x,
-            layer.motion_scale_y,
-            layer.zoom_strength,
-            layer.loop_type,
-            layer.movement_strength * layer.intensity * layer.global_intensity,
-            layer.duration,
-        )
+        self.movement_strength.set_value(layer.movement_strength, emit=False)
+        self.focus_depth.set_value(layer.focus_depth, emit=False)
+        self.motion_path.set_value((layer.motion_scale_x, layer.motion_scale_y), emit=False)
+        self.zoom_strength.setValue(max(0, min(100, int(round(layer.zoom_strength * 100)))), emit=False)
+        self.duration.setValue(max(0, min(100, int(round((layer.duration - 1.0) / 7.0 * 100)))), emit=False)
+        self.loop_type._value = layer.loop_type
+        self.loop_type._sync()
+        self.layer_intensity.setValue(max(0, min(100, int(round(layer.intensity * 100)))), emit=False)
+        self.layer_intensity.slider.setEnabled(True)
 
     def set_motion_ready(self, has_layer: bool, has_depth_motion: bool):
         ready = has_layer and has_depth_motion
@@ -947,8 +862,8 @@ class ControlsPanel(QWidget):
             )
 
         if not has_layer:
-            self.motion_notice.setText("Open or drop an image layer to begin.")
+            self.motion_notice.setText("Open or drop an image layer first. Motion controls stay disabled until there is artwork and depth variation.")
         elif not has_depth_motion:
-            self.motion_notice.setText("Paint depth on the layer. Flat 0.50 has no parallax.")
+            self.motion_notice.setText("Paint gentle depth variation on the selected layer. Flat 0.50 depth has no parallax to animate.")
         else:
-            self.motion_notice.setText("If motion looks warped, soften the depth map.")
+            self.motion_notice.setText("Preview uses the selected layer depth map. If motion looks warped, lower brush strength or blur the depth map.")
