@@ -14,6 +14,10 @@ Pillow==11.1.0
 imageio[ffmpeg]==2.37.0
 # imageio-ffmpeg provides the bundled encoder used for local builds.
 
+# AI depth estimation (Depth Anything V2 via ONNX). The model file itself is
+# downloaded on first use, not bundled.
+onnxruntime==1.28.0
+
 # Optional: GPU-accelerated export (NVIDIA only, dev machines).
 # Not installed by default and never bundled into builds: it pulls ~4GB of
 # CUDA runtime. Without it, export runs on the CPU renderer with identical

@@ -32,6 +32,7 @@ from app.core.depth import (
     redo_depth,
     undo_depth,
 )
+from app.core import depth_model
 from app.core.layer import Layer, is_supported_image, load_layer
 from app.core.project import ProjectSerializer
 from app.ui.canvas import CanvasPanel
@@ -39,6 +40,7 @@ from app.ui.about_dialog import AboutDialog
 from app.ui.controls import BrushSettings, ControlsPanel, MotionSettings
 from app.ui.help_dialog import QuickHelpDialog
 from app.ui.layer_panel import LayerPanel
+from app.ui.depth_model_dialog import DepthModelDialog
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.shortcuts_dialog import ShortcutsDialog
 from app.ui.theme import (
@@ -1406,10 +1408,28 @@ class MainWindow(QMainWindow):
         if layer is None:
             self.status_controller.warning("Select a layer before generating depth")
             return
-        auto_depth(layer)
+
+        model_id = self.settings.depth_model
+        model = depth_model.get_model(model_id)
+        use_model = bool(model.filename) and depth_model.is_available()
+
+        if use_model:
+            # Downloads on first use, then runs inference; both report progress.
+            dialog = DepthModelDialog(layer.image, model_id, self)
+            dialog.set_image(layer.image)
+            dialog.start()
+            if dialog.exec() != QDialog.DialogCode.Accepted or dialog.depth_map is None:
+                return
+            push_depth_undo(layer)
+            layer.depth_map = dialog.depth_map
+            source = model.label
+        else:
+            auto_depth(layer)
+            source = "built-in heuristic"
+
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
-        self.status_controller.info(f"Generated starter depth for {layer.name}")
+        self.status_controller.info(f"Depth generated for {layer.name} using {source}")
 
     def closeEvent(self, event):
         size = self.size()
