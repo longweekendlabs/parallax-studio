@@ -128,23 +128,19 @@ def depth_to_qimage(depth: np.ndarray | None) -> QImage | None:
     if depth is None:
         return None
     clipped = np.clip(depth, 0.0, 1.0)
-    delta = np.abs(clipped - 0.5) * 2.0
-    near = clipped >= 0.5
-    # Depthy draws its depth map as a near-opaque sprite (depthPreview 0.75-1.0),
-    # so a light stroke is still obvious. Here alpha is derived from distance
-    # from the 0.5 rest value, which makes light strokes transparent unless the
-    # curve lifts them: hence the floor plus a gamma below 1. Linear was honest
-    # but invisible; plain sqrt (the original) saturated and hid strong strokes.
-    # Gamma well below 1 so the first stroke is already obvious. Depth values
-    # near 0.5 are only a small distance from rest, so a linear or sqrt mapping
-    # leaves realistic strokes (depth 0.45, delta 0.1) almost transparent.
-    alpha = np.where(delta > 0.004, 50.0 + np.power(delta, 0.4) * 200.0, 0.0)
-    alpha = np.clip(alpha, 0.0, 250.0).astype(np.uint8)
     height, width = clipped.shape
-    rgba = np.zeros((height, width, 4), dtype=np.uint8)
-    rgba[:, :, 0] = np.where(near, 61, 166).astype(np.uint8)
-    rgba[:, :, 1] = np.where(near, 217, 139).astype(np.uint8)
-    rgba[:, :, 2] = np.where(near, 201, 255).astype(np.uint8)
-    rgba[:, :, 3] = alpha
+
+    # Show the depth field itself, the way Depthy does: it renders the depth map
+    # as a near-opaque greyscale sprite (previewSprite.alpha = depthPreview,
+    # which it sets to 0.75-1.0). Tinting by distance from neutral - what this
+    # used to do - collapses the falloff, so a soft edge and a hard edge look
+    # identical and each stroke just overrides the last. Painting brightness
+    # directly makes hardness, strength and overlap readable as shading.
+    grey = (clipped * 255.0).astype(np.uint8)
+    rgba = np.empty((height, width, 4), dtype=np.uint8)
+    rgba[:, :, 0] = grey
+    rgba[:, :, 1] = grey
+    rgba[:, :, 2] = grey
+    rgba[:, :, 3] = 185
     image = QImage(rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888)
     return image.copy()

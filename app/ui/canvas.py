@@ -399,59 +399,16 @@ class PreviewStage(QWidget):
         radius = min(radius, 180.0)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        # Colour says what the stroke does: amber erases, cyan pushes toward the
-        # viewer, violet pushes away. Matches the depth overlay's near/far hues.
-        if self._brush_erasing:
-            accent = QColor("#F2B35E")
-        elif self._brush_depth_value >= 0.5:
-            accent = QColor(61, 217, 201)
-        else:
-            accent = QColor(166, 139, 255)
-
-        # Fill reproduces the brush's real falloff: solid to the hardness
-        # radius, then a linear fade to nothing, scaled by strength.
-        hard_stop = min(0.99, self._brush_hardness)
-        peak = int(round(18 + 150 * self._brush_opacity))
-        grad = QRadialGradient(self._hover_pos, radius)
-        grad.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), peak))
-        grad.setColorAt(hard_stop, QColor(accent.red(), accent.green(), accent.blue(), peak))
-        grad.setColorAt(1.0, QColor(accent.red(), accent.green(), accent.blue(), 0))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(grad)
-        p.drawEllipse(self._hover_pos, radius, radius)
-
-        # Outer edge: the brush's full extent.
+        # Just the outline: it says how big the brush is, nothing more. What the
+        # stroke actually does is shown by the paint overlay on the image.
+        accent = QColor("#F2B35E") if self._brush_erasing else QColor(61, 217, 201)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor(0, 0, 0, 190), 3.0))
+        p.setPen(QPen(QColor(0, 0, 0, 170), 3.0))
         p.drawEllipse(self._hover_pos, radius + 1.5, radius + 1.5)
         p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 230), 1.5))
         p.drawEllipse(self._hover_pos, radius, radius)
-
-        # Inner dashed ring: where the falloff starts. Hidden when the two rings
-        # would overlap and just read as one thick line.
-        hard_radius = radius * hard_stop
-        if radius - hard_radius > 3.0 and hard_radius > 3.0:
-            pen = QPen(QColor(accent.red(), accent.green(), accent.blue(), 170), 1.0, Qt.PenStyle.DashLine)
-            pen.setDashPattern([3.0, 3.0])
-            p.setPen(pen)
-            p.drawEllipse(self._hover_pos, hard_radius, hard_radius)
-
-        # Strength: a short gauge under the cursor, filled in proportion.
-        if radius >= 14.0:
-            gauge_w = min(radius * 1.2, 46.0)
-            gx = self._hover_pos.x() - gauge_w / 2.0
-            gy = self._hover_pos.y() + radius + 7.0
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, 150))
-            p.drawRoundedRect(QRectF(gx - 1, gy - 1, gauge_w + 2, 5.0), 2.5, 2.5)
-            p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 235))
-            p.drawRoundedRect(QRectF(gx, gy, gauge_w * self._brush_opacity, 3.0), 1.5, 1.5)
-
-        p.setPen(QPen(QColor(255, 255, 255, 230), 1.0))
-        p.drawLine(QPointF(self._hover_pos.x() - 4, self._hover_pos.y()), QPointF(self._hover_pos.x() + 4, self._hover_pos.y()))
-        p.drawLine(QPointF(self._hover_pos.x(), self._hover_pos.y() - 4), QPointF(self._hover_pos.x(), self._hover_pos.y() + 4))
         p.restore()
+
 
     def _paint_composite(self, p: QPainter, r: QRect):
         if self.composite_image is None or self.composite_image.isNull():

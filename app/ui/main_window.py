@@ -324,6 +324,9 @@ class MainWindow(QMainWindow):
         self._preview_refresh_timer = QTimer(self)
         self._preview_refresh_timer.setSingleShot(True)
         self._preview_refresh_timer.timeout.connect(self._render_preview_frame)
+        self._overlay_refresh_timer = QTimer(self)
+        self._overlay_refresh_timer.setSingleShot(True)
+        self._overlay_refresh_timer.timeout.connect(self._redraw_depth_overlay)
         self.setWindowTitle(__app_name__)
         self.setMinimumSize(1280, 820)
         self.resize(self.settings.window_width, self.settings.window_height)
@@ -1079,6 +1082,22 @@ class MainWindow(QMainWindow):
         interval = max(1, int(1000 / max(1, self.motion_settings.preview_fps)))
         self._preview_timer.start(interval)
 
+    def _request_depth_overlay_refresh(self):
+        """Repaint just the depth overlay, at most once per frame.
+
+        Brushing fires many move events per second. Rebuilding the overlay
+        synchronously on each one is what made painting crawl.
+        """
+        if not self._overlay_refresh_timer.isActive():
+            self._overlay_refresh_timer.start(16)
+
+    def _redraw_depth_overlay(self):
+        layer = self._selected_layer()
+        composite = self.canvas.stage.composite_image
+        if composite is None or layer is None:
+            return
+        self.canvas.set_depth_overlay(self._depth_overlay_for_selected(composite, layer))
+
     def _request_preview_refresh(self):
         """Ask for one repaint soon, collapsing bursts of setting changes.
 
@@ -1210,7 +1229,11 @@ class MainWindow(QMainWindow):
                 max(0.55, self.brush_settings.opacity) if erase_mode else self.brush_settings.opacity,
             )
         self._last_paint_point = (layer_x, layer_y)
-        self._refresh_layers(refresh_panel=False, update_preview=False)
+        # Painting depth does not change the composited artwork, so a full
+        # _refresh_layers (recomposite every layer at full resolution, rebuild
+        # the control panel, re-check preview readiness) per mouse-move event
+        # was the reason brushing crawled. Only the depth overlay changes.
+        self._request_depth_overlay_refresh()
 
     def _finish_depth_paint(self):
         self._last_paint_point = None
