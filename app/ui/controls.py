@@ -105,7 +105,7 @@ class EmbeddedSlider(QWidget):
         self.right_text = right_text
         self.path_shape_getter = path_shape_getter
         self.magnetic_center = magnetic_center
-        self.setFixedHeight(42)
+        self.setFixedHeight(34)
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("background: transparent;")
 
@@ -593,7 +593,9 @@ class ControlsPanel(QWidget):
         content.setStyleSheet("background: transparent;")
         col = QVBoxLayout(content)
         col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(12)
+        col.setSpacing(6)
+
+        self._preview_fps = 24
 
         depth = Card("⌁", "DEPTH BRUSH")
         self.brush_size = SimpleSliderRow("Brush Size", 58, lambda v: str(max(4, int(v * 2.2))))
@@ -686,17 +688,6 @@ class ControlsPanel(QWidget):
             """
         )
         motion.layout.addWidget(self.motion_notice)
-        self.movement_strength = RangeStepper(
-            "movement",
-            [("Still", 0.0), ("Calm", 0.5), ("Normal", 1.0), ("Dramatic", 2.0)],
-            2,
-            formatter=lambda value: f"{value:.2f}x",
-            magnetic_center=True,
-        )
-        _set_tooltip_tree(
-            self.movement_strength,
-            "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic."
-        )
         self.focus_depth = RangeStepper(
             "focus",
             [("Near", 0.0), ("Middle", 0.5), ("Far", 1.0)],
@@ -725,7 +716,7 @@ class ControlsPanel(QWidget):
             "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing."
         )
         self.zoom_strength.valueChanged.connect(self._emit_motion_settings)
-        for stepper in [self.movement_strength, self.focus_depth, self.motion_path]:
+        for stepper in [self.focus_depth, self.motion_path]:
             stepper.changed.connect(self._emit_motion_settings)
             motion.layout.addWidget(stepper)
         motion.layout.insertWidget(2, self.zoom_strength)
@@ -748,38 +739,22 @@ class ControlsPanel(QWidget):
         for row in [self.layer_intensity]:
             row.valueChanged.connect(self._emit_motion_settings)
             motion.layout.addWidget(row)
-        self.preview_fps_row = RangeStepper(
-            "preview fps",
-            [("15", 15), ("24", 24), ("30", 30)],
-            1,
-            formatter=lambda value: f"{int(value)} fps",
-        )
-        _set_tooltip_tree(
-            self.preview_fps_row,
-            "Live preview playback rate while editing. This does not control exported video frame rate."
-        )
-        self.preview_fps_row.changed.connect(self._emit_motion_settings)
-        motion.layout.addWidget(self.preview_fps_row)
         col.addWidget(motion)
         self.motion_widgets = [
-            self.movement_strength,
             self.focus_depth,
             self.motion_path,
             self.zoom_strength,
             self.duration,
             self.loop_type,
             self.layer_intensity,
-            self.preview_fps_row,
         ]
         self.motion_tooltips = {
-            self.movement_strength: "Camera travel for the loop. Higher values increase separation between near and far depth; start calm before making the motion dramatic.",
             self.focus_depth: "Depth plane that stays most anchored. Near steadies foreground subjects; Far steadies the background.",
             self.motion_path: "Direction of camera motion. Horizontal is easiest to judge; Circular combines side-to-side and vertical drift.",
             self.zoom_strength: "Push-in and pull-back breathing. Too much zoom exaggerates rough depth paint, so keep it subtle while editing.",
             self.duration: "Length of one loop. Short loops feel faster; longer loops make the same motion calmer.",
             self.loop_type: "Seamless wraps cleanly for export; Bounce moves out and back, which is easier for inspecting depth problems.",
             self.layer_intensity: "Motion multiplier for the selected layer only. Lower this if this image layer warps more than the rest of the scene.",
-            self.preview_fps_row: "Live preview playback rate while editing. This does not control exported video frame rate.",
         }
 
         col.addStretch()
@@ -817,19 +792,18 @@ class ControlsPanel(QWidget):
             motion_scale_y=scale_y,
             zoom_strength=self.zoom_strength.value() / 100,
             loop_type=self.loop_type.value(),
-            movement_strength=self.movement_strength.value(),
+            movement_strength=1.0,
             focus_depth=self.focus_depth.value(),
             layer_intensity=self.layer_intensity.value() / 100,
             global_intensity=1.0,
             duration=1.0 + self.duration.value() / 100 * 7.0,
-            preview_fps=int(self.preview_fps_row.value()),
+            preview_fps=self._preview_fps,
         )
 
     def _emit_motion_settings(self):
         self.motionSettingsChanged.emit(self.motion_settings())
 
     def set_motion_settings(self, settings: MotionSettings):
-        self.movement_strength.set_value(settings.movement_strength, emit=False)
         self.focus_depth.set_value(settings.focus_depth, emit=False)
         self.motion_path.set_value((settings.motion_scale_x, settings.motion_scale_y), emit=False)
         self.zoom_strength.setValue(max(0, min(100, int(round(settings.zoom_strength * 100)))), emit=False)
@@ -837,10 +811,9 @@ class ControlsPanel(QWidget):
         self.loop_type._value = settings.loop_type
         self.loop_type._sync()
         self.layer_intensity.setValue(max(0, min(100, int(round(settings.layer_intensity * 100)))), emit=False)
-        self.preview_fps_row.set_value(settings.preview_fps, emit=False)
+        self._preview_fps = settings.preview_fps
 
     def set_selected_layer_motion(self, layer, locked: bool = False):
-        self.movement_strength.set_value(layer.movement_strength, emit=False)
         self.focus_depth.set_value(layer.focus_depth, emit=False)
         self.motion_path.set_value((layer.motion_scale_x, layer.motion_scale_y), emit=False)
         self.zoom_strength.setValue(max(0, min(100, int(round(layer.zoom_strength * 100)))), emit=False)
@@ -861,6 +834,9 @@ class ControlsPanel(QWidget):
                 else "Motion controls are disabled because the selected layer has flat depth. Paint gentle variation first.",
             )
 
+        # Once motion is usable the notice is just telling the user something
+        # they have already done, at the cost of ~75px of panel height.
+        self.motion_notice.setVisible(not ready)
         if not has_layer:
             self.motion_notice.setText("Open or drop an image layer first. Motion controls stay disabled until there is artwork and depth variation.")
         elif not has_depth_motion:

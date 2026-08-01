@@ -18,7 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import dataclasses as _dc
+
 from app.core.animator import loop_phase
+import cv2
+
 from app.core.compositor import composite_animated_layers, composite_layers
 from app.core.depth import (
     auto_depth,
@@ -312,6 +316,8 @@ class MainWindow(QMainWindow):
         self._active_transform_before: tuple[str, int, int, float] | None = None
         self._preview_playing = True
         self._paused_elapsed = 0.0
+        self._overlay_dirty = True
+        self._proxy_cache = {}
         self._preview_user_paused = False
         self._last_preview_ready = False
         self._preview_paused_for_paint = False
@@ -785,7 +791,7 @@ class MainWindow(QMainWindow):
         selected_visible = selected_layer is not None and selected_layer.visible
         if selected_visible:
             ensure_depth_map(selected_layer)
-        composite = composite_layers(self.layers)
+        composite = composite_layers(self._preview_layers())
         if refresh_panel:
             self.layer_panel.set_layers(self.layers, self.selected_layer_id)
         self.canvas.set_composite(
@@ -793,6 +799,7 @@ class MainWindow(QMainWindow):
             selected_layer.name if selected_layer else "",
         )
         self.canvas.set_depth_overlay(self._depth_overlay_for_selected(composite, selected_layer))
+        self._overlay_dirty = False
         duration = selected_layer.duration if selected_layer is not None else self.motion_settings.duration
         self.timeline.set_time(0.0, duration if self.layers else 0.0)
         self._sync_preview_readiness()
@@ -800,8 +807,9 @@ class MainWindow(QMainWindow):
         if selected_visible and composite is not None:
             offset = self._composite_layer_offset(composite, selected_layer)
             if offset is not None:
-                sw = max(1, int(selected_layer.image.width() * selected_layer.scale))
-                sh = max(1, int(selected_layer.image.height() * selected_layer.scale))
+                preview = self._preview_scale()
+                sw = max(1, int(selected_layer.image.width() * selected_layer.scale * preview))
+                sh = max(1, int(selected_layer.image.height() * selected_layer.scale * preview))
                 self.canvas.set_selected_layer_bounds(
                     (offset[0], offset[1], sw, sh),
                     selected_layer.scale,
@@ -1090,6 +1098,7 @@ class MainWindow(QMainWindow):
         Brushing fires many move events per second. Rebuilding the overlay
         synchronously on each one is what made painting crawl.
         """
+        self._overlay_dirty = True
         if not self._overlay_refresh_timer.isActive():
             self._overlay_refresh_timer.start(16)
 
@@ -1099,6 +1108,7 @@ class MainWindow(QMainWindow):
         if composite is None or layer is None:
             return
         self.canvas.set_depth_overlay(self._depth_overlay_for_selected(composite, layer))
+        self._overlay_dirty = False
 
     def _request_preview_refresh(self):
         """Ask for one repaint soon, collapsing bursts of setting changes.
@@ -1133,7 +1143,7 @@ class MainWindow(QMainWindow):
         amplitude = max(60.0, max(orig_w, orig_h) * 0.06)
 
         frame = composite_animated_layers(
-            self.layers,
+            self._preview_layers(),
             phase,
             amplitude,
             global_intensity=sel.global_intensity,
@@ -1142,14 +1152,59 @@ class MainWindow(QMainWindow):
         )
         selected_layer = self._selected_layer()
         self.canvas.set_composite(frame, selected_layer.name if selected_layer else "")
-        self.canvas.set_depth_overlay(self._depth_overlay_for_selected(frame, selected_layer))
+        # The depth overlay does not change between animation frames, and
+        # rebuilding it costs ~7ms at full resolution. Doing that every tick was
+        # most of the lag once Auto Depth gave the preview something to play.
+        if self._overlay_dirty:
+            self.canvas.set_depth_overlay(self._depth_overlay_for_selected(frame, selected_layer))
+            self._overlay_dirty = False
         self.timeline.set_time(elapsed % max(0.001, sel.duration), sel.duration)
+
+    # Preview never needs more pixels than the canvas can show. A 12MP photo
+    # displaced at full resolution costs ~20x more than it can display.
+    PREVIEW_MAX_DIM = 1280
+
+    def _preview_scale(self) -> float:
+        visible = [l for l in self.layers if l.visible and not l.image.isNull()]
+        if not visible:
+            return 1.0
+        longest = max(max(l.image.width(), l.image.height()) for l in visible)
+        if longest <= self.PREVIEW_MAX_DIM:
+            return 1.0
+        return self.PREVIEW_MAX_DIM / float(longest)
+
+    def _preview_layers(self) -> list[Layer]:
+        """Downscaled copies of the layers, cached until the source changes."""
+        scale = self._preview_scale()
+        if scale >= 1.0:
+            return self.layers
+        proxies = []
+        for layer in self.layers:
+            key = (layer.id, layer.image.cacheKey(), scale)
+            cached = self._proxy_cache.get(key)
+            depth = ensure_depth_map(layer)
+            if cached is None or cached[1] is not depth:
+                w = max(1, int(layer.image.width() * scale))
+                h = max(1, int(layer.image.height() * scale))
+                small = layer.image.scaled(
+                    w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                small_depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_AREA)
+                proxy = _dc.replace(layer, image=small, depth_map=small_depth)
+                self._proxy_cache = {key: (proxy, depth)}
+                cached = (proxy, depth)
+            proxies.append(cached[0])
+        return proxies
 
     def _composite_layer_offset(self, composite: QImage | None, layer: Layer) -> tuple[int, int] | None:
         if composite is None:
             return None
-        scaled_w = int(layer.image.width() * layer.scale)
-        scaled_h = int(layer.image.height() * layer.scale)
+        # The composite may be a downscaled preview, so measure the layer in the
+        # same space rather than in source pixels.
+        preview = self._preview_scale()
+        scaled_w = int(layer.image.width() * layer.scale * preview)
+        scaled_h = int(layer.image.height() * layer.scale * preview)
         return (
             (composite.width() - scaled_w) // 2 + layer.x_offset,
             (composite.height() - scaled_h) // 2 + layer.y_offset,
@@ -1191,6 +1246,12 @@ class MainWindow(QMainWindow):
         if layer.scale != 1.0:
             layer_x = int(layer_x / layer.scale)
             layer_y = int(layer_y / layer.scale)
+        # The canvas reports positions in the (possibly downscaled) preview
+        # composite, but depth is painted into the full-resolution map.
+        preview_scale = self._preview_scale()
+        if preview_scale < 1.0:
+            layer_x = int(layer_x / preview_scale)
+            layer_y = int(layer_y / preview_scale)
         if layer_x < 0 or layer_y < 0 or layer_x >= layer.image.width() or layer_y >= layer.image.height():
             return
         if begin_stroke:
