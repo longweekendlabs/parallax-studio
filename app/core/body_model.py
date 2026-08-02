@@ -215,33 +215,87 @@ def _control_points(kp: dict[str, Keypoint]) -> dict[str, Keypoint]:
     return points
 
 
-def _relief_field(
-    points: dict[str, Keypoint], shape: tuple[int, int], span: float
-) -> np.ndarray:
-    """Scatter the control-point depths into a smooth field.
+def _segments(kp: dict[str, Keypoint]) -> list[tuple[Keypoint, Keypoint, float, float]]:
+    """Body parts as bones: (start, end, depth, thickness multiplier).
 
-    Radial basis weighting: every pixel takes a confidence-weighted blend of
-    the control points near it, so the field is smooth everywhere and has no
-    seams between parts. The kernel is sized from the figure, not the frame, so
-    it behaves the same for a full-length shot and a close crop.
+    A limb is a region between two joints, not a point. Weighting by distance
+    to a *point* gives every part a circular footprint, and a torso covered in
+    overlapping discs is exactly the blobby ripple this is meant to avoid --
+    that was the visible failure of the first attempt. Distance to the bone
+    segment instead gives each part a limb-shaped region.
+    """
+    bones: list[tuple[Keypoint, Keypoint, float, float]] = []
+
+    def add(a: str, b: str, depth: float, thick: float = 1.0):
+        if a in kp and b in kp:
+            bones.append((kp[a], kp[b], depth, thick))
+
+    shoulders = [kp[s] for s in ("left_shoulder", "right_shoulder") if s in kp]
+    hips = [kp[s] for s in ("left_hip", "right_hip") if s in kp]
+    if shoulders and hips:
+        shoulder_mid = shoulders[0] if len(shoulders) == 1 else _midpoint(*shoulders)
+        hip_mid = hips[0] if len(hips) == 1 else _midpoint(*hips)
+        # The trunk is split rather than treated as one bone: chest against
+        # waist against hips is the separation actually being asked for.
+        chest_end = _midpoint(shoulder_mid, hip_mid, 0.42)
+        waist_end = _midpoint(shoulder_mid, hip_mid, 0.78)
+        bones.append((shoulder_mid, chest_end, PART_DEPTHS["chest"], 1.7))
+        bones.append((chest_end, waist_end, PART_DEPTHS["waist"], 1.5))
+        bones.append((waist_end, hip_mid, PART_DEPTHS["pelvis"], 1.6))
+
+    for side in ("left", "right"):
+        add(f"{side}_shoulder", f"{side}_elbow", PART_DEPTHS["left_upper_arm"], 0.7)
+        add(f"{side}_elbow", f"{side}_wrist", PART_DEPTHS["left_forearm"], 0.6)
+        add(f"{side}_hip", f"{side}_knee", PART_DEPTHS["left_thigh"], 1.0)
+        add(f"{side}_knee", f"{side}_ankle", PART_DEPTHS["left_shin"], 0.8)
+
+    for eye in ("nose", "left_eye", "right_eye"):
+        if eye in kp:
+            bones.append((kp[eye], kp[eye], PART_DEPTHS["nose"], 0.9))
+            break
+    return bones
+
+
+def _relief_field(
+    bones: list[tuple[Keypoint, Keypoint, float, float]],
+    shape: tuple[int, int],
+    span: float,
+) -> np.ndarray:
+    """Paint each bone's depth over the region around it.
+
+    Weight falls off with distance to the bone *segment*, so a thigh covers a
+    thigh-shaped band rather than a disc at its midpoint. Weights are blended
+    rather than winner-takes-all, which keeps the joins smooth and leaves no
+    seam for the feather to have to fix.
     """
     height, width = shape
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    sigma = max(3.0, span * 0.05)
-    two_sigma_sq = 2.0 * sigma * sigma
+    base_sigma = max(3.0, span * 0.085)
 
     total = np.zeros((height, width), np.float32)
     weight = np.zeros((height, width), np.float32)
-    for name, point in points.items():
-        depth = PART_DEPTHS.get(name)
-        if depth is None:
-            continue
-        dist_sq = (xx - point.x) ** 2 + (yy - point.y) ** 2
-        w = np.exp(-dist_sq / two_sigma_sq) * point.score
+    for start, end, depth, thick in bones:
+        ax, ay, bx, by = start.x, start.y, end.x, end.y
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-6:
+            dist_sq = (xx - ax) ** 2 + (yy - ay) ** 2
+        else:
+            # Project each pixel onto the segment, clamped to its ends.
+            t = np.clip(((xx - ax) * dx + (yy - ay) * dy) / length_sq, 0.0, 1.0)
+            dist_sq = (xx - (ax + t * dx)) ** 2 + (yy - (ay + t * dy)) ** 2
+        sigma = base_sigma * thick
+        w = np.exp(-dist_sq / (2.0 * sigma * sigma))
+        w *= min(start.score, end.score)
         total += w * depth
         weight += w
 
-    return total / np.maximum(weight, 1e-6)
+    # Coverage says how strongly any bone actually reaches a pixel. Without it
+    # the normalise below paints the whole frame with the nearest bone's depth,
+    # and a second person in shot -- who has no bones, because the pose model
+    # only finds one figure -- gets flooded with the first person's values.
+    coverage = np.clip(weight / 0.35, 0.0, 1.0)
+    return total / np.maximum(weight, 1e-6), coverage
 
 
 def body_part_depth(
@@ -269,21 +323,34 @@ def body_part_depth(
             "Body Relief needs a mostly unobstructed figure."
         )
 
-    points = _control_points(kp)
-    ys = [p.y for p in points.values()]
-    xs = [p.x for p in points.values()]
+    ys = [p.y for p in kp.values()]
+    xs = [p.x for p in kp.values()]
     span = max(max(ys) - min(ys), max(xs) - min(xs), 1.0)
 
-    # Built on a proxy: the field is smooth by construction, and the radial
-    # basis loop costs one full-resolution array per control point otherwise.
+    bones = _segments(kp)
+    if not bones:
+        raise BodyReliefUnavailable(
+            "Found a figure but could not place its limbs. Body Relief needs "
+            "the torso and at least one arm or leg visible."
+        )
+
+    # Built on a proxy: the field is smooth by construction, and the distance
+    # loop costs one full-resolution array per bone otherwise.
     scale = min(1.0, 384.0 / max(height, width))
     small_shape = (max(1, int(height * scale)), max(1, int(width * scale)))
-    scaled = {
-        name: Keypoint(p.x * scale, p.y * scale, p.score) for name, p in points.items()
-    }
-    field = _relief_field(scaled, small_shape, span * scale)
+    scaled = [
+        (
+            Keypoint(a.x * scale, a.y * scale, a.score),
+            Keypoint(b.x * scale, b.y * scale, b.score),
+            depth,
+            thick,
+        )
+        for a, b, depth, thick in bones
+    ]
+    field, coverage = _relief_field(scaled, small_shape, span * scale)
     if scale < 1.0:
         field = cv2.resize(field, (width, height), interpolation=cv2.INTER_LINEAR)
+        coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_LINEAR)
 
     # Keep the figure where the depth model put it, and give it the pose field
     # for its shape. A little of the model's own within-figure detail rides on
@@ -296,17 +363,21 @@ def body_part_depth(
     spread = BODY_SPREAD if strength is None else max(0.05, float(strength))
     rebuilt = centre + field * spread + detail * MODEL_DETAIL
 
-    blended = base_depth * (1.0 - mask) + rebuilt * mask
+    # Only where the pose actually reaches. Elsewhere -- background, and any
+    # figure the pose model did not find -- the depth model's map stands.
+    apply = mask * coverage
+    blended = base_depth * (1.0 - apply) + rebuilt * apply
     lo, hi = (float(v) for v in np.percentile(blended, (2.0, 98.0)))
     if hi - lo < 1e-6:
         return base_depth
     logger.info(
-        "Body relief: %d landmarks, %d control points, figure %.1f%% of frame, spread %.2f",
-        len(kp), len(points), float(solid.mean()) * 100, spread,
+        "Body relief: %d landmarks, %d bones, figure %.1f%% of frame, spread %.2f",
+        len(kp), len(bones), float(solid.mean()) * 100, spread,
     )
     # Surfaced in the status bar, so a run that quietly did nothing is
     # distinguishable from one that worked.
     body_part_depth.last_report = (
-        f"{len(kp)} landmarks, figure {float(solid.mean()) * 100:.0f}% of frame"
+        f"{len(kp)} landmarks, {len(bones)} body parts, "
+        f"figure {float(solid.mean()) * 100:.0f}% of frame"
     )
     return np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)

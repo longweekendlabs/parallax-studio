@@ -94,6 +94,35 @@ def rgba_to_qimage(array: np.ndarray) -> QImage:
     return image.copy().convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
 
 
+# The motion controls were calibrated when depth came from the brightness
+# heuristic, whose maps sit in a narrow band: measured std 0.068. A real depth
+# model spans far more of the range -- 0.233 on the same picture -- so the same
+# slider position drove 3.5x the motion once Auto Depth started using a model,
+# which is why the results read as over-driven and unrelated to the sliders.
+#
+# Amplitude is therefore divided by how much depth range the map actually uses,
+# so a slider position means the same amount of movement whether the depth was
+# painted by hand, guessed by the heuristic, or estimated by the model.
+REFERENCE_SPREAD = 0.18
+_GAIN_LIMITS = (0.35, 2.5)
+
+
+def depth_gain(depth: np.ndarray | None) -> float:
+    """Scale factor that makes motion independent of the depth map's range."""
+    if depth is None or depth.size == 0:
+        return 1.0
+    spread = float(depth.std())
+    if spread < 1e-4:
+        return 1.0
+    low, high = _GAIN_LIMITS
+    return max(low, min(high, REFERENCE_SPREAD / spread))
+
+
+def motion_amplitude(width: int, height: int, depth: np.ndarray | None = None) -> float:
+    """Base travel in source pixels, normalised for the depth map's range."""
+    return max(60.0, max(width, height) * 0.06) * depth_gain(depth)
+
+
 def motion_offset(
     scale_x: float,
     scale_y: float,
