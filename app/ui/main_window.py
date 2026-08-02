@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 import dataclasses as _dc
+import time
+from collections import deque
 
 from app.core.animator import loop_phase
 import cv2
@@ -316,6 +318,7 @@ class MainWindow(QMainWindow):
         self._active_transform_before: tuple[str, int, int, float] | None = None
         self._preview_playing = True
         self._paused_elapsed = 0.0
+        self._frame_times: deque[float] = deque()
         self._overlay_dirty = True
         self._proxy_cache = {}
         self._preview_user_paused = False
@@ -435,6 +438,7 @@ class MainWindow(QMainWindow):
         self.canvas.layerTransformFinished.connect(self._finish_transform_edit)
         self.timeline.playRequested.connect(lambda: self._set_preview_playing(True))
         self.timeline.pauseRequested.connect(lambda: self._set_preview_playing(False))
+        self.timeline.fpsChanged.connect(self._set_preview_fps)
         self.layer_panel.addLayerRequested.connect(self._add_layers_from_picker)
         self.layer_panel.layerSelected.connect(self._select_layer)
         self.layer_panel.layerRemoveRequested.connect(self._remove_layer)
@@ -457,6 +461,7 @@ class MainWindow(QMainWindow):
             self.brush_settings.depth_value,
         )
         self.timeline.set_time(0.0, 0.0)
+        self.timeline.set_preview_fps(self.motion_settings.preview_fps)
         self._sync_preview_readiness()
         self._start_preview_timer()
 
@@ -675,7 +680,7 @@ class MainWindow(QMainWindow):
 
         dlg = ExportDialog(
             self.layers,
-            self.motion_settings,
+            self._preview_motion(),
             last_export_dir=self.settings.last_export_dir,
             parent=self,
             use_gpu=self.settings.gpu_export,
@@ -1092,6 +1097,53 @@ class MainWindow(QMainWindow):
         interval = max(1, int(1000 / max(1, self.motion_settings.preview_fps)))
         self._preview_timer.start(interval)
 
+    def _set_preview_fps(self, fps: int):
+        """Set the preview playback rate, and with it the export default.
+
+        Frame rate is smoothness only — loop speed comes from duration in both
+        the preview and the exporter — so this changes how the motion reads,
+        not how fast it runs.
+        """
+        self.motion_settings = _dc.replace(self.motion_settings, preview_fps=int(fps))
+        # The panel rebuilds MotionSettings from its own widgets on every slider
+        # move, so it has to carry the new rate or the next edit reverts it.
+        self.controls.set_preview_fps(int(fps))
+        self._frame_times.clear()
+        self.timeline.set_measured_fps(None)
+        self._start_preview_timer()
+
+    def _record_frame_time(self):
+        """Track the rate the preview is really managing, over a ~1s window."""
+        now = time.monotonic()
+        self._frame_times.append(now)
+        while len(self._frame_times) > 2 and now - self._frame_times[0] > 1.0:
+            self._frame_times.popleft()
+        if len(self._frame_times) < 5:
+            return
+        span = self._frame_times[-1] - self._frame_times[0]
+        if span <= 0:
+            return
+        self.timeline.set_measured_fps((len(self._frame_times) - 1) / span)
+
+    def _preview_motion(self) -> MotionSettings:
+        """The motion the preview is actually rendering.
+
+        `_render_preview_frame` reads the selected layer, but selecting a layer
+        refreshes the panel with emit=False, so `self.motion_settings` goes
+        stale. Exporting from it rendered a different animation from the one on
+        screen.
+        """
+        sel = self._selected_layer() or (self.layers[0] if self.layers else None)
+        if sel is None:
+            return self.motion_settings
+        return _dc.replace(
+            self.motion_settings,
+            duration=sel.duration,
+            loop_type=sel.loop_type,
+            global_intensity=sel.global_intensity,
+            focus_depth=sel.focus_depth,
+        )
+
     def _request_depth_overlay_refresh(self):
         """Repaint just the depth overlay, at most once per frame.
 
@@ -1159,6 +1211,8 @@ class MainWindow(QMainWindow):
             self.canvas.set_depth_overlay(self._depth_overlay_for_selected(frame, selected_layer))
             self._overlay_dirty = False
         self.timeline.set_time(elapsed % max(0.001, sel.duration), sel.duration)
+        if self._preview_playing:
+            self._record_frame_time()
 
     # Preview never needs more pixels than the canvas can show. A 12MP photo
     # displaced at full resolution costs ~20x more than it can display.

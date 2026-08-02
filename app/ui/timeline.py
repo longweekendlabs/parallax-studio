@@ -1,12 +1,21 @@
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.ui.theme import (
     C_ACCENT,
     C_BORDER,
     C_BORDER_SOFT,
     C_CANVAS_SURROUND,
+    C_EXPORT,
     C_PANEL_BG,
     C_RAISED_PANEL,
     C_TEXT_MAIN,
@@ -115,9 +124,82 @@ class FilmStrip(QWidget):
         p.drawPolygon(QPolygonF([QPointF(x, 30), QPointF(x - 10, 10), QPointF(x + 10, 10)]))
 
 
+class FpsSelector(QWidget):
+    """Preview playback rate.
+
+    The choices mirror the export frame rates so the preview can be set to the
+    rate the file will be rendered at before committing to a render. Note this
+    only affects smoothness: loop speed comes from duration, in both paths.
+    """
+
+    changed = Signal(int)
+
+    RATES = (24, 30, 60)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value = 24
+        self._buttons: dict[int, QPushButton] = {}
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for rate in self.RATES:
+            btn = QPushButton(str(rate))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedSize(34, 24)
+            btn.setToolTip(f"Play the preview at {rate} fps, matching a {rate} fps export")
+            btn.clicked.connect(lambda _=False, r=rate: self.set_value(r))
+            self._buttons[rate] = btn
+            row.addWidget(btn)
+        row.addStretch()
+        self._sync()
+
+    def value(self) -> int:
+        return self._value
+
+    def set_value(self, rate: int, emit: bool = True):
+        if rate not in self._buttons:
+            return
+        changed = rate != self._value
+        self._value = rate
+        self._sync()
+        if changed and emit:
+            self.changed.emit(rate)
+
+    def _sync(self):
+        for rate, btn in self._buttons.items():
+            active = rate == self._value
+            btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {C_ACCENT if active else "transparent"};
+                    border: 1px solid {C_ACCENT if active else C_BORDER};
+                    border-radius: 5px;
+                    color: {"#08131A" if active else C_TEXT_SECONDARY};
+                    font-size: 12px;
+                    font-weight: {700 if active else 500};
+                }}
+                QPushButton:hover {{
+                    border-color: {C_ACCENT};
+                }}
+                QPushButton:disabled {{
+                    color: {C_TEXT_MUTED};
+                    border-color: {C_BORDER_SOFT};
+                    background: transparent;
+                }}
+                """
+            )
+
+    def setEnabled(self, enabled: bool):  # noqa: N802 - Qt naming
+        super().setEnabled(enabled)
+        for btn in self._buttons.values():
+            btn.setEnabled(enabled)
+
+
 class TimelineStrip(QWidget):
     playRequested = Signal()
     pauseRequested = Signal()
+    fpsChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -176,14 +258,29 @@ class TimelineStrip(QWidget):
         row.addWidget(sep)
 
         meta_col = QVBoxLayout()
-        meta_col.setSpacing(8)
-        for label, value in [("Preview", "24fps"), ("Loop", "Motion panel")]:
-            lbl = QLabel(label)
-            lbl.setStyleSheet(f"background: transparent; color: {C_TEXT_SECONDARY}; font-size: 13px;")
-            val = QLabel(value)
-            val.setStyleSheet(f"background: transparent; color: {C_TEXT_MAIN}; font-size: 15px; font-weight: 600;")
-            meta_col.addWidget(lbl)
-            meta_col.addWidget(val)
+        meta_col.setSpacing(6)
+
+        fps_lbl = QLabel("Preview fps")
+        fps_lbl.setStyleSheet(f"background: transparent; color: {C_TEXT_SECONDARY}; font-size: 13px;")
+        meta_col.addWidget(fps_lbl)
+        self.fps_selector = FpsSelector()
+        self.fps_selector.changed.connect(self.fpsChanged.emit)
+        meta_col.addWidget(self.fps_selector)
+
+        # Only speaks up when the preview cannot keep up with the selected rate,
+        # which is the case where the preview stops predicting the export.
+        self.fps_actual_label = QLabel("")
+        self.fps_actual_label.setStyleSheet(
+            f"background: transparent; color: {C_EXPORT}; font-size: 11px;"
+        )
+        meta_col.addWidget(self.fps_actual_label)
+
+        loop_lbl = QLabel("Loop")
+        loop_lbl.setStyleSheet(f"background: transparent; color: {C_TEXT_SECONDARY}; font-size: 13px;")
+        loop_val = QLabel("Motion panel")
+        loop_val.setStyleSheet(f"background: transparent; color: {C_TEXT_MAIN}; font-size: 15px; font-weight: 600;")
+        meta_col.addWidget(loop_lbl)
+        meta_col.addWidget(loop_val)
         row.addLayout(meta_col)
         self.set_preview_ready(False)
         self.set_playing(False)
@@ -196,8 +293,32 @@ class TimelineStrip(QWidget):
             self.pause_button.set_active(self._ready and not playing)
             self.pause_button.setEnabled(self._ready)
 
+    def set_preview_fps(self, fps: int):
+        self.fps_selector.set_value(fps, emit=False)
+
+    def set_measured_fps(self, measured: float | None):
+        """Report the rate the preview is actually achieving.
+
+        Stays blank while the preview keeps up. When it cannot, the preview is
+        no longer a fair prediction of the exported file, and the user needs to
+        know that before judging the motion by it.
+        """
+        target = self.fps_selector.value()
+        if measured is None or measured >= target * 0.85:
+            self.fps_actual_label.setText("")
+            self.fps_actual_label.setToolTip("")
+            return
+        self.fps_actual_label.setText(f"actual {measured:.0f} fps")
+        self.fps_actual_label.setToolTip(
+            f"This image is too large to preview at {target} fps. The export still "
+            f"renders every frame, so the file will be smoother than this preview."
+        )
+
     def set_preview_ready(self, ready: bool):
         self._ready = ready
+        self.fps_selector.setEnabled(ready)
+        if not ready:
+            self.set_measured_fps(None)
         self.setToolTip(
             "Preview loop follows the generated parallax motion"
             if ready

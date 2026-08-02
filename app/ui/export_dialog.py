@@ -134,6 +134,11 @@ class _ExportWorker(QObject):
             self.error.emit(str(exc))
 
 
+def _clamp_tenths(seconds: float) -> int:
+    """Duration in tenths of a second, clamped to the export slider's range."""
+    return max(10, min(300, int(round(seconds * 10))))
+
+
 def _section_header(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(
@@ -318,13 +323,17 @@ class ExportDialog(QDialog):
         dur_row.setSpacing(10)
         dur_row.addWidget(_row_label("Duration"))
         self._duration_slider = QSlider(Qt.Orientation.Horizontal)
-        self._duration_slider.setRange(2, 30)
-        self._duration_slider.setValue(max(2, min(30, int(self._motion.duration))))
+        # Tenths of a second. Whole seconds could not represent the motion
+        # panel's duration (a continuous 1.0-8.0s), so seeding this slider
+        # truncated it and the exported loop ran at a different speed from the
+        # preview — up to 2x slower at the panel's "Short" end.
+        self._duration_slider.setRange(10, 300)
+        self._duration_slider.setValue(_clamp_tenths(self._motion.duration))
         self._duration_slider.setFixedHeight(18)
-        self._duration_slider.setToolTip("Length of the rendered loop. Longer exports move more slowly and create more frames.")
-        self._duration_val = _value_box(f"{self._duration_slider.value()} s")
+        self._duration_slider.setToolTip("Length of the rendered loop, and the only control over playback speed. Defaults to the duration the preview is playing.")
+        self._duration_val = _value_box(f"{self._duration_slider.value() / 10:.1f} s")
         self._duration_slider.valueChanged.connect(
-            lambda v: self._duration_val.setText(f"{v} s")
+            lambda v: self._duration_val.setText(f"{v / 10:.1f} s")
         )
         dur_row.addWidget(self._duration_slider, stretch=1)
         dur_row.addWidget(self._duration_val)
@@ -337,9 +346,15 @@ class ExportDialog(QDialog):
         self._fps_combo = QComboBox()
         self._fps_combo.addItems(["24 fps", "30 fps", "60 fps"])
         self._fps_combo.setToolTip(
-            "Frames per second for the exported file. 60 fps produces smooth motion playback."
+            "Frames per second for the exported file. This controls smoothness only — "
+            "loop speed comes entirely from Duration. Defaults to the preview's rate."
         )
-        self._fps_combo.setCurrentText("60 fps")
+        # Default to whatever the preview is playing at, so the exported file
+        # matches the smoothness the user just judged it by.
+        preview_rate = f"{int(self._motion.preview_fps)} fps"
+        self._fps_combo.setCurrentText(
+            preview_rate if self._fps_combo.findText(preview_rate) >= 0 else "60 fps"
+        )
         self._fps_combo.setFixedWidth(110)
         fps_row.addWidget(self._fps_combo)
         col.addLayout(fps_row)
@@ -568,7 +583,7 @@ class ExportDialog(QDialog):
 
         self._worker = _ExportWorker(
             layers=self._layers,
-            duration=float(self._duration_slider.value()),
+            duration=self._duration_slider.value() / 10.0,
             fps=self._fps_value(),
             scale=self._scale_value(),
             loop_type=self._motion.loop_type,
