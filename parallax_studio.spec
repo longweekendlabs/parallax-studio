@@ -20,6 +20,8 @@ a = Analysis(
         # Depth Anything V2 inference; imported lazily in app/core/depth_model.py
         "onnxruntime",
         "onnxruntime.capi._pybind_state",
+        # Body Relief; imported lazily from app/core/depth_model.py
+        "app.core.body_model",
         # imageio backends
         "imageio.plugins.ffmpeg",
         "imageio_ffmpeg",
@@ -121,11 +123,11 @@ app = BUNDLE(
     name="Parallax Studio.app",
     icon=None,           # Phase 9: add assets/icons/app.icns
     bundle_identifier="com.longweekendlabs.parallaxstudio",
-    version="0.9.0",
+    version="0.9.1",
     info_plist={
         "CFBundleDisplayName": "Parallax Studio",
-        "CFBundleVersion": "0.9.0",
-        "CFBundleShortVersionString": "0.9.0",
+        "CFBundleVersion": "0.9.1",
+        "CFBundleShortVersionString": "0.9.1",
         "NSPrincipalClass": "NSApplication",
         "NSAppleScriptEnabled": False,
         "NSHighResolutionCapable": True,
