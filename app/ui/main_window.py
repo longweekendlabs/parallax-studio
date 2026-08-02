@@ -613,17 +613,32 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self.status_controller.info("New project ready")
 
+    def _remember_dir(self, path: str | Path):
+        """Persist the folder a file came from, so the next dialog opens there.
+
+        Written straight away rather than at shutdown: settings were only saved
+        in closeEvent, so the folder was lost whenever the app did not exit
+        cleanly.
+        """
+        folder = str(Path(path).parent)
+        if folder and folder != self.settings.last_open_dir:
+            self.settings.last_open_dir = folder
+            save_settings(self.settings)
+
     def _open_project(self):
         path = open_project_or_image(self, "Open Project or Image", self.settings.last_open_dir)
         if path:
             file_path = Path(path)
+            # Both branches, not just projects: opening an image is the common
+            # case and it was the one that never recorded the folder.
+            self._remember_dir(file_path)
             if file_path.suffix.lower() == ".parlx":
                 self._open_project_at_path(file_path)
             else:
                 self._import_image_paths([path])
 
     def _open_project_at_path(self, project_path: Path):
-        self.settings.last_open_dir = str(project_path.parent)
+        self._remember_dir(project_path)
         try:
             with open(project_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -666,7 +681,7 @@ class MainWindow(QMainWindow):
         if project_path.suffix != ".parlx":
             project_path = project_path.with_suffix(".parlx")
 
-        self.settings.last_open_dir = str(project_path.parent)
+        self._remember_dir(project_path)
         self.current_project_path = project_path
         self._save_project()
         self._update_window_title()
@@ -739,7 +754,7 @@ class MainWindow(QMainWindow):
     def _add_layers_from_picker(self):
         files = open_images(self, "Add Image Layers", self.settings.last_open_dir)
         if files:
-            self.settings.last_open_dir = str(Path(files[0]).parent)
+            self._remember_dir(files[0])
             self._import_image_paths(files)
 
     def _import_image_paths(self, paths: list[str]):

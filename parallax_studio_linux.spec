@@ -18,6 +18,8 @@ a = Analysis(
         # Depth Anything V2 inference; imported lazily in app/core/depth_model.py
         "onnxruntime",
         "onnxruntime.capi._pybind_state",
+        # Body Relief; imported lazily from app/core/depth_model.py
+        "app.core.body_model",
         "imageio.plugins.ffmpeg",
         "imageio_ffmpeg",
         "PIL.Image",

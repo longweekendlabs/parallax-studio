@@ -649,9 +649,11 @@ class ControlsPanel(QWidget):
         )
         self.body_relief_button = SmallAction("Body Relief", True)
         self.body_relief_button.setToolTip(
-            "Same depth model as Auto Depth, but the subject's own shape is stretched to "
-            "fill much more of the depth range, so chest, hips and legs carry separate "
-            "parallax instead of the figure sliding as one cutout."
+            "For photos of people. Finds the figure and its pose, then rebuilds the depth "
+            "inside it so chest, waist, hips, knees and arms each carry their own parallax "
+            "instead of the figure sliding as one cutout. Downloads two small models the "
+            "first time. Needs a mostly unobstructed person; falls back with a message if "
+            "it cannot find one."
         )
         self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")

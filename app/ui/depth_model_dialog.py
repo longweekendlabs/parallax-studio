@@ -41,28 +41,46 @@ class _Worker(QObject):
     def cancel(self):
         self._cancelled = True
 
+    def _fetch(self, model) -> bool:
+        """Download one model, reporting progress. False if cancelled."""
+        if depth_model.has_file(model):
+            return True
+
+        def on_progress(done: int, total: int):
+            self.progress.emit(
+                done, total,
+                f"Downloading {model.label}  {done // 1048576} / {max(1, total // 1048576)} MB",
+            )
+
+        self.progress.emit(0, 1, f"Connecting to download {model.label}...")
+        depth_model.ensure_file(
+            model, progress_cb=on_progress, cancelled_cb=lambda: self._cancelled
+        )
+        return not self._cancelled
+
     @Slot()
     def run(self):
         try:
-            model = depth_model.get_model(self._model_id)
-            if not depth_model.is_downloaded(self._model_id):
-                def on_progress(done: int, total: int):
-                    self.progress.emit(
-                        done, total, f"Downloading {model.label}  {done // 1048576} / {total // 1048576} MB"
-                    )
+            if not self._fetch(depth_model.get_model(self._model_id)):
+                return
+            if self._relief:
+                # Body relief needs the person and pose models on top of the
+                # depth model; each is fetched once and kept.
+                from app.core import body_model
 
-                self.progress.emit(0, 1, f"Connecting to download {model.label}...")
-                depth_model.download_model(
-                    self._model_id,
-                    progress_cb=on_progress,
-                    cancelled_cb=lambda: self._cancelled,
-                )
+                for extra in body_model.BODY_MODELS:
+                    if not self._fetch(extra):
+                        return
 
             if self._cancelled:
                 return
 
             # Indeterminate: inference is a single opaque call.
-            self.progress.emit(0, 0, "Analysing image depth...")
+            self.progress.emit(
+                0, 0,
+                "Finding the body and its parts..." if self._relief
+                else "Analysing image depth...",
+            )
             depth = depth_model.estimate_depth(self._image, self._model_id, relief=self._relief)
             if self._cancelled:
                 return
@@ -86,6 +104,10 @@ class DepthModelDialog(QDialog):
 
         model = depth_model.get_model(model_id)
         already = depth_model.is_downloaded(model_id)
+        if relief:
+            from app.core import body_model
+
+            already = already and body_model.models_ready()
         title = "Body Relief" if relief else "Auto Depth"
         self.setWindowTitle(title if already else "Download Depth Model")
         self.setModal(True)

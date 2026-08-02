@@ -108,11 +108,7 @@ def model_path(model_id: str) -> Path | None:
 
 
 def is_downloaded(model_id: str) -> bool:
-    path = model_path(model_id)
-    if path is None or not path.is_file():
-        return False
-    # A partial file from an interrupted download would load as a corrupt model.
-    return path.stat().st_size >= get_model(model_id).approx_bytes * 0.95
+    return has_file(get_model(model_id))
 
 
 def is_available() -> bool:
@@ -130,11 +126,31 @@ def download_model(
     cancelled_cb: Callable[[], bool] | None = None,
 ) -> Path:
     """Fetch the model to its cache path. Returns immediately if already there."""
-    model = get_model(model_id)
-    target = model_path(model_id)
+    return ensure_file(get_model(model_id), progress_cb, cancelled_cb)
+
+
+def file_path(model: DepthModel) -> Path | None:
+    return models_dir() / model.filename if model.filename else None
+
+
+def has_file(model: DepthModel) -> bool:
+    path = file_path(model)
+    if path is None or not path.is_file():
+        return False
+    # A partial file from an interrupted download would load as a corrupt model.
+    return path.stat().st_size >= model.approx_bytes * 0.95
+
+
+def ensure_file(
+    model: DepthModel,
+    progress_cb: Callable[[int, int], None] | None = None,
+    cancelled_cb: Callable[[], bool] | None = None,
+) -> Path:
+    """Download any cached model file. Shared with the body-part models."""
+    target = file_path(model)
     if target is None:
         raise ValueError(f"{model.label} has no model file to download")
-    if is_downloaded(model_id):
+    if has_file(model):
         return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -169,13 +185,17 @@ def download_model(
 
 
 def _session(model_id: str):
-    session = _SESSIONS.get(model_id)
+    return open_session(model_path(model_id), model_id)
+
+
+def open_session(path: Path | None, cache_key: str):
+    """Cached ONNX session. Shared with the body-part models."""
+    session = _SESSIONS.get(cache_key)
     if session is not None:
         return session
 
     import onnxruntime as ort
 
-    path = model_path(model_id)
     if path is None or not path.is_file():
         raise RuntimeError("Model file is missing; download it first")
 
@@ -187,7 +207,7 @@ def _session(model_id: str):
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     session = ort.InferenceSession(str(path), options, providers=providers)
-    _SESSIONS[model_id] = session
+    _SESSIONS[cache_key] = session
     logger.info("Loaded %s using %s", path.name, session.get_providers())
     return session
 
@@ -218,24 +238,7 @@ DESIGN_AMPLITUDE = 0.06
 DESIGN_INTENSITY = 0.4875
 FOLD_MARGIN = 0.85
 
-# Body-relief mode. The model separates a subject from its background cleanly
-# but leaves the subject's own shape nearly flat: chest-to-hip relief measures
-# around 8% of the silhouette step, because a chest sits centimetres proud of
-# the hips while the subject is metres in front of the wall. That is
-# geometrically right and reads as a rigid cutout sliding about.
-#
-# Depth at that scale has a lot of unused headroom before it folds: features
-# ~20% of the frame apart stay safe up to about 0.46 of depth amplitude, so
-# roughly 15x what the model gives.
-#
-# The gain sets how much of the 0..1 range the subject may claim for its own
-# relief, at 0.12 per unit. 3.0 measured as a 5.6x lift in within-body depth
-# spread with the sampling grid still monotonic; raise it for more separation
-# between body parts, at the cost of looking less like a photograph.
-RELIEF_GAIN = 3.0
-
-
-def soften_for_parallax(depth: np.ndarray, relief_gain: float = 0.0) -> np.ndarray:
+def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
     """Make a model depth map survive being used as a displacement map.
 
     The model draws a subject's outline as a near-vertical step in depth. A
@@ -255,8 +258,6 @@ def soften_for_parallax(depth: np.ndarray, relief_gain: float = 0.0) -> np.ndarr
     relief (chest, hips) out with the step.
     """
     height, width = depth.shape[:2]
-    if relief_gain > 0.0:
-        depth = _body_relief(depth, relief_gain)
     depth = 0.5 + (depth - 0.5) * PARALLAX_RANGE
     sigma = max(1.0, max(width, height) * PARALLAX_FEATHER)
 
@@ -311,85 +312,6 @@ def soften_for_parallax(depth: np.ndarray, relief_gain: float = 0.0) -> np.ndarr
     return np.clip(depth, 0.0, 1.0).astype(np.float32)
 
 
-def _body_relief(depth: np.ndarray, gain: float) -> np.ndarray:
-    """Amplify depth variation *within* a subject, leaving the outline alone.
-
-    A band-pass at body-part scale: the subject-against-background separation
-    is below it and model noise is above it, so what is left to lift is the
-    chest/hip/leg relief. All of it is low-frequency, which is why it can be
-    built on a proxy and upsampled.
-
-    Both ends of the band-pass are edge-aware, against the same near/far mask.
-    That matters more than it sounds: a plain Gaussian drags background depth
-    across the outline, so the band-pass reads the entire figure as one large
-    positive detail. Sharing one mask makes both ends follow the outline
-    identically, so their difference is ~0 there by construction and the boost
-    has nothing to grip.
-
-    Runs before the range is compressed, and renormalises afterwards. Adding
-    the boost to a map that already spans 0..1 just clips the subject flat,
-    which is the failure it exists to prevent -- measured at half the frame
-    saturated when it was applied the other way round.
-    """
-    near = _near_mask(depth)
-    # Statistics come from confidently-classified pixels only. Taking them from
-    # everything over 0.5 pulls in the mask's own soft boundary, and those
-    # background-valued pixels drag the subject's low percentile down into the
-    # background -- which makes the stretch below a no-op.
-    subject = near > 0.9
-    background = near < 0.1
-    # No usable figure/ground split: a landscape, or a frame filled by one
-    # surface. Stretching an arbitrary threshold there invents structure.
-    if subject.sum() < depth.size * 0.02 or background.sum() < depth.size * 0.02:
-        return depth
-
-    lo_s, hi_s = (float(v) for v in np.percentile(depth[subject], (NORM_PCT_LO, NORM_PCT_HI)))
-    lo_b, hi_b = (float(v) for v in np.percentile(depth[background], (NORM_PCT_LO, NORM_PCT_HI)))
-    if hi_s - lo_s < 1e-5 or hi_b - lo_b < 1e-5:
-        return depth
-
-    # Give each side its own slice of the range and stretch its own variation
-    # to fill it. The subject keeps the near band, so it still reads as being in
-    # front, but its internal relief now spans `band` instead of the ~8% of the
-    # step the model leaves it with. `gain` sets how much of the range the
-    # subject is allowed to claim.
-    band = min(0.48, 0.12 * gain)
-    gap = (1.0 - 2.0 * band) * 0.5
-    front = np.clip((depth - lo_s) / (hi_s - lo_s), 0.0, 1.0) * band + (band + 2.0 * gap)
-    back = np.clip((depth - lo_b) / (hi_b - lo_b), 0.0, 1.0) * band
-
-    return np.clip(near * front + (1.0 - near) * back, 0.0, 1.0).astype(np.float32)
-
-
-def _near_mask(depth: np.ndarray) -> np.ndarray:
-    """Soft 0..1 split between the near subject and the far background.
-
-    Otsu picks the split, so it follows whatever the histogram actually does
-    rather than assuming a fixed depth. It is only used to find the two groups
-    though, not as the boundary: with clusters as separated as a subject and
-    its background, every cut through the empty middle scores the same and
-    Otsu returns the first, which sits hard against the near edge of the
-    background. A sigmoid centred there never reaches 0 on the background side.
-
-    So the sigmoid is centred between the two group means and scaled to their
-    separation, which puts it in the middle of the gap on any histogram. The
-    edge stays soft; a hard mask would put its own step into the depth map.
-    """
-    as_u8 = np.clip(depth * 255.0, 0, 255).astype(np.uint8)
-    level, _ = cv2.threshold(as_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    split = float(level) / 255.0
-
-    low = depth[depth <= split]
-    high = depth[depth > split]
-    if low.size == 0 or high.size == 0:
-        return np.full(depth.shape, 0.5, dtype=np.float32)
-
-    lo_mean, hi_mean = float(low.mean()), float(high.mean())
-    centre = (lo_mean + hi_mean) * 0.5
-    softness = max(0.02, (hi_mean - lo_mean) * 0.15)
-    return (1.0 / (1.0 + np.exp(-(depth - centre) / softness))).astype(np.float32)
-
-
 def estimate_depth(image: QImage, model_id: str, relief: bool = False) -> np.ndarray:
     """Run the model and return a float32 depth map, 0 far to 1 near.
 
@@ -428,4 +350,10 @@ def estimate_depth(image: QImage, model_id: str, relief: bool = False) -> np.nda
     if hi - lo < 1e-6:
         return np.full((height, width), 0.5, dtype=np.float32)
     depth = np.clip((depth - lo) / (hi - lo), 0.0, 1.0)
-    return soften_for_parallax(depth, relief_gain=RELIEF_GAIN if relief else 0.0)
+    if relief:
+        # Imported here: body_model imports this module for its download and
+        # session helpers.
+        from app.core import body_model
+
+        depth = body_model.body_part_depth(image, depth)
+    return soften_for_parallax(depth)
