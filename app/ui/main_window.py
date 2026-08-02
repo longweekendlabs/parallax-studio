@@ -22,7 +22,7 @@ import dataclasses as _dc
 import time
 from collections import deque
 
-from app.core.animator import loop_phase
+from app.core.animator import loop_phase, motion_amplitude
 import cv2
 
 from app.core.compositor import composite_animated_layers, composite_layers
@@ -1208,7 +1208,7 @@ class MainWindow(QMainWindow):
         visible_layers = [l for l in self.layers if l.visible and not l.image.isNull()]
         orig_w = max((l.image.width() for l in visible_layers), default=800)
         orig_h = max((l.image.height() for l in visible_layers), default=600)
-        amplitude = max(60.0, max(orig_w, orig_h) * 0.06)
+        amplitude = motion_amplitude(orig_w, orig_h, ensure_depth_map(sel))
 
         frame = composite_animated_layers(
             self._preview_layers(),

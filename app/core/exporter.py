@@ -133,7 +133,9 @@ def render_frames_cuda(
         indexing="ij",
     )
 
-    amplitude = max(60.0, max(orig_w, orig_h) * 0.06)
+    amplitude = motion_amplitude(
+        orig_w, orig_h, ensure_depth_map(visible_layers[0])
+    )
     gpu_layers = []
     for layer in visible_layers:
         rgba = _qimage_to_rgba(layer.image)
@@ -287,7 +289,9 @@ def render_frames(
 
     total = max(1, int(round(duration * fps)))
     frames: list[np.ndarray] = []
-    amplitude = max(60.0, max(orig_w, orig_h) * 0.06)
+    amplitude = motion_amplitude(
+        orig_w, orig_h, ensure_depth_map(visible_layers[0])
+    )
 
     for i in range(total):
         if cancelled_cb and cancelled_cb():
