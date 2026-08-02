@@ -1141,6 +1141,34 @@ class MainWindow(QMainWindow):
             return
         self.timeline.set_measured_fps((len(self._frame_times) - 1) / span)
 
+    def _apply_body_relief_motion(self, layer: Layer, focus: float):
+        """Set the motion controls to suit the depth Body Relief just wrote.
+
+        Generating a per-part depth map and leaving the sliders where they were
+        wastes it: focus in particular has to sit on the figure, or every part
+        stays on one side of the neutral plane and they all drift together.
+        The panel is updated too, so the new positions are visible and can be
+        taken over by hand from there.
+        """
+        focus = max(0.05, min(0.95, float(focus)))
+        self.motion_settings = _dc.replace(
+            self.motion_settings,
+            focus_depth=focus,
+            # Sideways travel reads the opposing motion between parts best;
+            # vertical drift mostly just slides the whole figure.
+            motion_scale_x=1.0,
+            motion_scale_y=0.25,
+            # Zoom pushes everything along the same axis as the part
+            # separation, which muddies it.
+            zoom_strength=0.12,
+        )
+        layer.focus_depth = focus
+        layer.motion_scale_x = 1.0
+        layer.motion_scale_y = 0.25
+        layer.zoom_strength = 0.12
+        self.controls.set_motion_settings(self.motion_settings)
+        self._request_preview_refresh()
+
     def _preview_motion(self) -> MotionSettings:
         """The motion the preview is actually rendering.
 
@@ -1568,6 +1596,9 @@ class MainWindow(QMainWindow):
 
                 detail = getattr(body_part_depth, "last_report", "")
                 source = f"body relief ({detail})" if detail else "body relief"
+                focus = getattr(body_part_depth, "suggested_focus", None)
+                if focus is not None:
+                    self._apply_body_relief_motion(layer, focus)
             else:
                 source = model.label
         elif relief:

@@ -130,17 +130,22 @@ def depth_to_qimage(depth: np.ndarray | None) -> QImage | None:
     clipped = np.clip(depth, 0.0, 1.0)
     height, width = clipped.shape
 
-    # Show the depth field itself, the way Depthy does: it renders the depth map
-    # as a near-opaque greyscale sprite (previewSprite.alpha = depthPreview,
-    # which it sets to 0.75-1.0). Tinting by distance from neutral - what this
-    # used to do - collapses the falloff, so a soft edge and a hard edge look
-    # identical and each stroke just overrides the last. Painting brightness
-    # directly makes hardness, strength and overlap readable as shading.
+    # Depth as colour, not brightness. Greyscale is what Depthy uses, but its
+    # overlay only ever has to show hand-painted strokes, which are drawn with
+    # deliberate contrast. A generated depth map puts a whole figure inside a
+    # fraction of the range -- measured, an entire body spanning 85 of 255 grey
+    # levels once the alpha blend is applied -- and that reads as one flat wash
+    # with no parts visible in it. The eye resolves far more steps in hue than
+    # in lightness, so the same data becomes legible as a ramp.
+    #
+    # Blue is far, cyan/green is the neutral plane, red is near, which matches
+    # the direction the motion controls talk about.
     grey = (clipped * 255.0).astype(np.uint8)
+    coloured = cv2.applyColorMap(grey, cv2.COLORMAP_TURBO)  # BGR
     rgba = np.empty((height, width, 4), dtype=np.uint8)
-    rgba[:, :, 0] = grey
-    rgba[:, :, 1] = grey
-    rgba[:, :, 2] = grey
-    rgba[:, :, 3] = 185
+    rgba[:, :, 0] = coloured[:, :, 2]
+    rgba[:, :, 1] = coloured[:, :, 1]
+    rgba[:, :, 2] = coloured[:, :, 0]
+    rgba[:, :, 3] = 150
     image = QImage(rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888)
     return image.copy()

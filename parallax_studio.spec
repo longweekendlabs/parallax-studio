@@ -123,11 +123,11 @@ app = BUNDLE(
     name="Parallax Studio.app",
     icon=None,           # Phase 9: add assets/icons/app.icns
     bundle_identifier="com.longweekendlabs.parallaxstudio",
-    version="0.9.3",
+    version="0.9.4",
     info_plist={
         "CFBundleDisplayName": "Parallax Studio",
-        "CFBundleVersion": "0.9.3",
-        "CFBundleShortVersionString": "0.9.3",
+        "CFBundleVersion": "0.9.4",
+        "CFBundleShortVersionString": "0.9.4",
         "NSPrincipalClass": "NSApplication",
         "NSAppleScriptEnabled": False,
         "NSHighResolutionCapable": True,
