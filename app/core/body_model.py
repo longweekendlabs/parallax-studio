@@ -74,11 +74,11 @@ MIN_KEYPOINTS = 8
 MIN_PERSON_FRACTION = 0.01
 
 # How much of the depth range the figure's own parts are allowed to span.
-# Measured on a full-length photo: 0.55 puts a ~0.41 depth range across the
-# named parts, with adjacent parts like chest/waist/hips separated by ~0.25
-# each and the sampling grid still clean after feathering. Raise it for more
-# separation between parts, lower it for something closer to a photograph.
-BODY_SPREAD = 0.55
+# Measured on a full-length photo the differential motion between chest and
+# waist runs about 13px of a 1000px frame at 0.55, 21px at 1.30, with the
+# sampling grid still clean throughout. The default sits high because subtle
+# is not what this button is for; Settings exposes it per taste.
+BODY_SPREAD = 1.10
 # How much of the depth model's own within-figure detail to keep on top, so
 # folds of clothing and the face do not go completely flat.
 MODEL_DETAIL = 0.30
@@ -244,7 +244,9 @@ def _relief_field(
     return total / np.maximum(weight, 1e-6)
 
 
-def body_part_depth(image: QImage, base_depth: np.ndarray) -> np.ndarray:
+def body_part_depth(
+    image: QImage, base_depth: np.ndarray, strength: float | None = None
+) -> np.ndarray:
     """Rebuild the depth inside a figure from its pose.
 
     ``base_depth`` is the depth model's output, already normalised 0..1. The
@@ -291,14 +293,20 @@ def body_part_depth(image: QImage, base_depth: np.ndarray) -> np.ndarray:
     detail = base_depth - cv2.GaussianBlur(
         base_depth, (0, 0), sigmaX=max(1.0, span * 0.10)
     )
-    rebuilt = centre + field * BODY_SPREAD + detail * MODEL_DETAIL
+    spread = BODY_SPREAD if strength is None else max(0.05, float(strength))
+    rebuilt = centre + field * spread + detail * MODEL_DETAIL
 
     blended = base_depth * (1.0 - mask) + rebuilt * mask
     lo, hi = (float(v) for v in np.percentile(blended, (2.0, 98.0)))
     if hi - lo < 1e-6:
         return base_depth
     logger.info(
-        "Body relief: %d landmarks, %d control points, figure %.1f%% of frame",
-        len(kp), len(points), float(solid.mean()) * 100,
+        "Body relief: %d landmarks, %d control points, figure %.1f%% of frame, spread %.2f",
+        len(kp), len(points), float(solid.mean()) * 100, spread,
+    )
+    # Surfaced in the status bar, so a run that quietly did nothing is
+    # distinguishable from one that worked.
+    body_part_depth.last_report = (
+        f"{len(kp)} landmarks, figure {float(solid.mean()) * 100:.0f}% of frame"
     )
     return np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)

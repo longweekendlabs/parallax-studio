@@ -1546,14 +1546,30 @@ class MainWindow(QMainWindow):
 
         if use_model:
             # Downloads on first use, then runs inference; both report progress.
-            dialog = DepthModelDialog(layer.image, model_id, self, relief=relief)
+            dialog = DepthModelDialog(
+                layer.image, model_id, self, relief=relief,
+                relief_strength=self.settings.body_relief_strength if relief else None,
+            )
             dialog.set_image(layer.image)
             dialog.start()
             if dialog.exec() != QDialog.DialogCode.Accepted or dialog.depth_map is None:
+                # Cancelled, or it could not run. The dialog already said why;
+                # say it again here so a run that did nothing is not mistaken
+                # for one that produced the same result as Auto Depth.
+                if relief:
+                    self.status_controller.warning(
+                        "Body Relief did not run, so the depth map is unchanged"
+                    )
                 return
             push_depth_undo(layer)
             layer.depth_map = dialog.depth_map
-            source = f"{model.label}, body relief" if relief else model.label
+            if relief:
+                from app.core.body_model import body_part_depth
+
+                detail = getattr(body_part_depth, "last_report", "")
+                source = f"body relief ({detail})" if detail else "body relief"
+            else:
+                source = model.label
         elif relief:
             # Body relief needs a model that can find the subject; the
             # brightness heuristic has no idea where one is.

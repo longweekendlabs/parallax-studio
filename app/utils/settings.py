@@ -19,6 +19,10 @@ class AppSettings:
     gpu_encode: bool = True
     # Depth model used by the Auto Depth button; see app/core/depth_model.py
     depth_model: str = "dav2-small-fp16"
+    # How far apart Body Relief pushes the parts of a figure. Must match
+    # body_model.BODY_SPREAD, which is the same number for callers that do not
+    # go through settings. Adjustable in the Settings dialog.
+    body_relief_strength: float = 1.10
 
 
 def load_settings(path: Path | None = None) -> AppSettings:

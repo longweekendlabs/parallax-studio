@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QVBoxLayout,
 )
 
@@ -125,6 +127,35 @@ class SettingsDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(_rule())
         layout.addSpacing(6)
+
+        layout.addWidget(_section("BODY RELIEF STRENGTH"))
+        strength_row = QHBoxLayout()
+        self.relief_slider = QSlider(Qt.Orientation.Horizontal)
+        # Tenths. Above ~1.3 the figure starts reading as rubbery rather than
+        # photographic, but it stays free of tearing across the whole range.
+        self.relief_slider.setRange(2, 20)
+        self.relief_slider.setValue(
+            max(2, min(20, int(round(self._settings.body_relief_strength * 10))))
+        )
+        self.relief_value = QLabel(f"{self.relief_slider.value() / 10:.1f}")
+        self.relief_value.setStyleSheet(
+            f"color: {C_TEXT_MAIN}; font-size: 12px; background: transparent;"
+        )
+        self.relief_slider.valueChanged.connect(
+            lambda v: self.relief_value.setText(f"{v / 10:.1f}")
+        )
+        strength_row.addWidget(self.relief_slider, stretch=1)
+        strength_row.addWidget(self.relief_value)
+        layout.addLayout(strength_row)
+        layout.addWidget(_hint(
+            "How far apart Body Relief pushes chest, hips and legs. Higher "
+            "separates the parts more; the figure looks less like a photograph "
+            "and more like a paper cut-out as it climbs."
+        ))
+
+        layout.addSpacing(6)
+        layout.addWidget(_rule())
+        layout.addSpacing(6)
         layout.addWidget(_hint(
             "Preview frame rate lives with the other motion controls in the "
             "right-hand panel."
@@ -187,4 +218,5 @@ class SettingsDialog(QDialog):
             self._settings.gpu_encode = self.gpu_encode_check.isChecked()
         if self.model_combo.isEnabled():
             self._settings.depth_model = self.model_combo.currentData()
+        self._settings.body_relief_strength = self.relief_slider.value() / 10.0
         return self._settings
