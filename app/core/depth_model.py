@@ -199,6 +199,100 @@ def _qimage_to_rgb(image: QImage) -> np.ndarray:
     return arr[:, :, :3].copy()
 
 
+# Robust normalisation bounds, in percent.
+NORM_PCT_LO = 2.0
+NORM_PCT_HI = 98.0
+
+# Feather width at a depth discontinuity, as a fraction of the image's long
+# edge, and how much of the 0..1 range the result is allowed to span.
+PARALLAX_FEATHER = 0.020
+PARALLAX_RANGE = 0.80
+
+# The renderer displaces by `amplitude * intensity * (depth - focus) * 2`, with
+# amplitude 6% of the long edge. The sampling grid folds where that displacement
+# changes by more than one pixel per pixel, so the depth gradient has to stay
+# under `1 / (2 * amplitude * intensity)`. These are the defaults it is sized
+# for; turning intensity up past them can still stretch the silhouette, which is
+# inherent to displacing a flat image with no inpainting behind the subject.
+DESIGN_AMPLITUDE = 0.06
+DESIGN_INTENSITY = 0.4875
+FOLD_MARGIN = 0.85
+
+
+def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
+    """Make a model depth map survive being used as a displacement map.
+
+    The model draws a subject's outline as a near-vertical step in depth. A
+    step does not stretch under displacement, it tears: the sampling grid stops
+    being monotonic and the image folds back over itself along the silhouette.
+    On a 1600px frame that measured as a single source pixel smeared across 90
+    output pixels, with the grid running backwards through the fold. Every
+    parallax artefact the outline shows comes from this, and a sharper model
+    makes it worse, not better.
+
+    The fix is to spread that shear across a band of pixels instead of one, and
+    to keep the range short of a full 0..1 swing. Both are applied only to
+    model output; painted depth is already smooth because the brush has falloff.
+
+    The feather is weighted by local gradient so it lands on the silhouette and
+    leaves flat interiors alone: blurring uniformly would take the body's own
+    relief (chest, hips) out with the step.
+    """
+    height, width = depth.shape[:2]
+    depth = 0.5 + (depth - 0.5) * PARALLAX_RANGE
+    sigma = max(1.0, max(width, height) * PARALLAX_FEATHER)
+
+    # Both the feather and its weight map are smooth by construction, so they
+    # are built on a proxy and upsampled. At 12MP a full-resolution blur of this
+    # width costs seconds; this keeps the whole pass under 100ms.
+    scale = min(1.0, 512.0 / max(width, height))
+    if scale < 1.0:
+        small = cv2.resize(depth, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    else:
+        small = depth
+    small_sigma = max(0.6, sigma * scale)
+    small_blur = cv2.GaussianBlur(small, (0, 0), sigmaX=small_sigma)
+
+    # Take the feathered version only where the depth gradient is steep enough
+    # to fold the sampling grid, and keep the model's own detail everywhere
+    # else. Blurring uniformly would lift the body's relief (chest, hips,
+    # hands) out along with the step; measured, it costs 70-80% of any detail
+    # finer than the feather.
+    #
+    # The threshold is the fold limit itself, not a fraction of the steepest
+    # edge in the picture: scaling against the peak leaves every secondary edge
+    # below it partly sharp, and those tear too.
+    long_edge = max(width, height)
+    amplitude = max(60.0, long_edge * DESIGN_AMPLITUDE)
+    safe_grad = FOLD_MARGIN / (2.0 * amplitude * DESIGN_INTENSITY)
+
+    # Sobel's 3x3 kernel sums to 8 over a unit ramp, and a proxy pixel spans
+    # 1/scale source pixels, so undo both to get depth units per source pixel.
+    # Measured on the unblurred proxy: the question is how steep the map being
+    # replaced is, and reading it off the blurred copy makes a wider feather
+    # look flatter, which drives the weight to zero and leaves the step intact.
+    grad = cv2.magnitude(
+        cv2.Sobel(small, cv2.CV_32F, 1, 0, ksize=3),
+        cv2.Sobel(small, cv2.CV_32F, 0, 1, ksize=3),
+    ) * (scale / 8.0)
+    small_weight = np.clip(grad / safe_grad, 0.0, 1.0)
+    # The band over the fold threshold is only a few pixels wide. Smoothing it
+    # directly would flatten its own peak and leave most of the step unfeathered,
+    # so grow it to cover the feather first, then soften only its edges.
+    radius = max(1, int(round(small_sigma * 2.0)))
+    small_weight = cv2.dilate(small_weight, np.ones((radius * 2 + 1,) * 2, np.uint8))
+    small_weight = cv2.GaussianBlur(small_weight, (0, 0), sigmaX=max(0.6, small_sigma * 0.5))
+
+    if scale < 1.0:
+        blurred = cv2.resize(small_blur, (width, height), interpolation=cv2.INTER_LINEAR)
+        weight = cv2.resize(small_weight, (width, height), interpolation=cv2.INTER_LINEAR)
+    else:
+        blurred, weight = small_blur, small_weight
+
+    depth = depth * (1.0 - weight) + blurred * weight
+    return np.clip(depth, 0.0, 1.0).astype(np.float32)
+
+
 def estimate_depth(image: QImage, model_id: str) -> np.ndarray:
     """Run the model and return a float32 depth map, 0 far to 1 near.
 
@@ -227,9 +321,11 @@ def estimate_depth(image: QImage, model_id: str) -> np.ndarray:
     depth = cv2.resize(depth, (width, height), interpolation=cv2.INTER_CUBIC)
 
     # Depth Anything predicts relative inverse depth: larger is nearer, with an
-    # arbitrary scale, so normalise per image.
-    lo = float(depth.min())
-    hi = float(depth.max())
+    # arbitrary scale, so normalise per image. Percentiles rather than min/max
+    # because one specular highlight or blown-out sky would otherwise squeeze
+    # the entire scene into a fraction of the range.
+    lo, hi = (float(v) for v in np.percentile(depth, (NORM_PCT_LO, NORM_PCT_HI)))
     if hi - lo < 1e-6:
         return np.full((height, width), 0.5, dtype=np.float32)
-    return np.clip((depth - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+    depth = np.clip((depth - lo) / (hi - lo), 0.0, 1.0)
+    return soften_for_parallax(depth)
