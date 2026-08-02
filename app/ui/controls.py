@@ -545,6 +545,7 @@ class ControlsPanel(QWidget):
     invertDepthRequested = Signal()
     blurDepthRequested = Signal()
     autoDepthRequested = Signal()
+    bodyReliefRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -646,9 +647,15 @@ class ControlsPanel(QWidget):
         self.auto_depth_button.setToolTip(
             "Generate a starter depth map from the selected image. This is editable and undoable, not final AI depth."
         )
-        self.clear_depth_button = SmallAction("Clear Depth")
+        self.body_relief_button = SmallAction("Body Relief", True)
+        self.body_relief_button.setToolTip(
+            "Same depth model as Auto Depth, but the subject's own shape is stretched to "
+            "fill much more of the depth range, so chest, hips and legs carry separate "
+            "parallax instead of the figure sliding as one cutout."
+        )
+        self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")
-        self.blur_depth_button = SmallAction("Soften Once")
+        self.blur_depth_button = SmallAction("Soften")
         self.clear_depth_button.setToolTip(
             "Return the selected layer to flat 0.50 depth. Parallax motion will pause until the layer has depth variation again."
         )
@@ -662,13 +669,15 @@ class ControlsPanel(QWidget):
         self.invert_depth_button.clicked.connect(self.invertDepthRequested.emit)
         self.blur_depth_button.clicked.connect(self.blurDepthRequested.emit)
         self.auto_depth_button.clicked.connect(self.autoDepthRequested.emit)
-        for i, button in enumerate([
-            self.auto_depth_button,
-            self.clear_depth_button,
-            self.invert_depth_button,
-            self.blur_depth_button,
-        ]):
-            buttons.addWidget(button, i // 2, i % 2)
+        self.body_relief_button.clicked.connect(self.bodyReliefRequested.emit)
+        # Six columns so the two depth generators get half the width each and the
+        # three edits share the row below. A fifth button on the old 2x2 grid
+        # would have added a third row and put the scrollbar back.
+        buttons.addWidget(self.auto_depth_button, 0, 0, 1, 3)
+        buttons.addWidget(self.body_relief_button, 0, 3, 1, 3)
+        buttons.addWidget(self.clear_depth_button, 1, 0, 1, 2)
+        buttons.addWidget(self.invert_depth_button, 1, 2, 1, 2)
+        buttons.addWidget(self.blur_depth_button, 1, 4, 1, 2)
         depth.layout.addLayout(buttons)
         col.addWidget(depth)
 
