@@ -456,7 +456,11 @@ def body_part_depth(
     # the model gave it and travels with the body instead.
     for hx, hy, radius in heads:
         yy, xx = np.mgrid[0:small_shape[0], 0:small_shape[1]].astype(np.float32)
-        keep = 1.0 - np.exp(-((xx - hx) ** 2 + (yy - hy) ** 2) / (2.0 * radius * radius))
+        # Fourth power, not squared: a plain Gaussian only reaches zero at the
+        # exact centre, so the jaw and neck still took part of the relief. This
+        # has a flat floor over the whole head and climbs quickly outside it.
+        norm = ((xx - hx) ** 2 + (yy - hy) ** 2) / (radius * radius)
+        keep = 1.0 - np.exp(-(norm * norm) / 2.0)
         coverage = coverage * keep
 
     if scale < 1.0:
@@ -476,11 +480,26 @@ def body_part_depth(
 
     # Only where the pose actually reaches. Elsewhere -- background, and any
     # figure the pose model did not find -- the depth model's map stands.
-    apply = mask * coverage
+    # Squared, so the segmentation's soft halo outside the figure falls away
+    # fast and the relief stops at the body rather than leaking onto what is
+    # behind it.
+    apply = (mask * mask) * coverage
+
+    # Fit the rebuilt figure into the room available around its own depth,
+    # rather than renormalising the finished map. A global renormalise was
+    # rescaling every pixel in the frame, so changing the body quietly moved
+    # the background with it -- measured, the background shifted by a third of
+    # what the body did, on pixels this is supposed to leave alone.
+    sel = apply > 0.05
+    if sel.any():
+        low, high = (float(v) for v in np.percentile(rebuilt[sel], (1.0, 99.0)))
+        middle = (low + high) * 0.5
+        have = (high - low) * 0.5
+        room = max(0.05, min(centre, 1.0 - centre) * 0.95)
+        if have > room:
+            rebuilt = middle + (rebuilt - middle) * (room / have)
+
     blended = base_depth * (1.0 - apply) + rebuilt * apply
-    lo, hi = (float(v) for v in np.percentile(blended, (2.0, 98.0)))
-    if hi - lo < 1e-6:
-        return base_depth
 
     figure_frac = float(solid.mean())
     logger.info(
@@ -491,7 +510,7 @@ def body_part_depth(
         f"{len(spans)} figure{'s' if len(spans) != 1 else ''}, "
         f"{len(all_bones)} body parts, {figure_frac * 100:.0f}% of frame"
     )
-    result = np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+    result = np.clip(blended, 0.0, 1.0).astype(np.float32)
     body_part_depth.suggested_motion = _suggest_motion(
         result, solid, people, span / max(height, width)
     )
