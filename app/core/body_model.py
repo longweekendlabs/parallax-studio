@@ -270,7 +270,12 @@ def _relief_field(
     """
     height, width = shape
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    base_sigma = max(3.0, span * 0.085)
+    # Sized to a limb's thickness, not the whole figure. At 8.5% of the figure
+    # the three trunk bones -- only ~11% of it apart -- averaged into each
+    # other and the field delivered a chest/waist gap of 0.11 where the table
+    # asked for 1.20. At 3% it delivers 0.93, and the final map carries 6.9x
+    # more separation between the parts.
+    base_sigma = max(3.0, span * 0.030)
 
     total = np.zeros((height, width), np.float32)
     weight = np.zeros((height, width), np.float32)
@@ -380,4 +385,14 @@ def body_part_depth(
         f"{len(kp)} landmarks, {len(bones)} body parts, "
         f"figure {float(solid.mean()) * 100:.0f}% of frame"
     )
-    return np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+    result = np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+
+    # The motion controls cannot be left where they were. Focus sets the plane
+    # that does not move, and everything is displaced by its distance from it.
+    # Left at the middle of the frame it sits behind the figure, so every part
+    # is on the same side of it and they all slide the same way -- differing
+    # only in how much. Put on the figure's own median depth, the chest is in
+    # front of the plane and the hips behind it, so they travel in opposite
+    # directions, which is what reads as parts moving against each other.
+    body_part_depth.suggested_focus = float(np.median(result[solid]))
+    return result
