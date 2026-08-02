@@ -23,6 +23,8 @@ class AppSettings:
     # body_model.BODY_SPREAD, which is the same number for callers that do not
     # go through settings. Adjustable in the Settings dialog.
     body_relief_strength: float = 1.10
+    # Pose model behind Body Relief; see app/core/body_model.py POSE_SPECS
+    pose_model: str = "movenet-multipose"
 
 
 def load_settings(path: Path | None = None) -> AppSettings:

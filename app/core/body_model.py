@@ -17,6 +17,7 @@ run on the ONNX Runtime already in the build.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Callable, NamedTuple
 
 import cv2
@@ -44,21 +45,63 @@ SEGMENT_MODEL = DepthModel(
     note="Finds the person, so body relief never touches the background.",
 )
 
-POSE_MODEL = DepthModel(
+POSE_LIGHTNING = DepthModel(
     id="movenet-lightning",
-    label="Pose landmarks (9 MB)",
+    label="MoveNet Lightning (9 MB, one person)",
     url="https://huggingface.co/onnx-community/movenet-lightning-web/resolve/main/onnx/model.onnx",
     filename="movenet-lightning.onnx",
     approx_bytes=9_366_903,
     license="Apache-2.0",
     commercial_ok=True,
-    note="Locates shoulders, hips, knees and ankles to place the body parts.",
+    note="Fastest. Finds a single figure only; anyone else in shot is left alone.",
 )
 
-BODY_MODELS: tuple[DepthModel, ...] = (SEGMENT_MODEL, POSE_MODEL)
+POSE_THUNDER = DepthModel(
+    id="movenet-thunder",
+    label="MoveNet Thunder (25 MB, one person, more accurate)",
+    url="https://huggingface.co/Xenova/movenet-singlepose-thunder/resolve/main/onnx/model.onnx",
+    filename="movenet-thunder.onnx",
+    approx_bytes=25_067_197,
+    license="Apache-2.0",
+    commercial_ok=True,
+    note="Places joints more precisely than Lightning. Still one figure only.",
+)
+
+POSE_MULTIPOSE = DepthModel(
+    id="movenet-multipose",
+    label="MoveNet MultiPose (19 MB, up to 6 people)",
+    url="https://huggingface.co/Xenova/movenet-multipose-lightning/resolve/main/onnx/model.onnx",
+    filename="movenet-multipose.onnx",
+    approx_bytes=19_049_169,
+    license="Apache-2.0",
+    commercial_ok=True,
+    note="Recommended. Gives every figure in the frame its own body parts.",
+)
+
+
+@dataclass(frozen=True)
+class PoseSpec:
+    """Each export wants a different input, so carry it with the model."""
+
+    model: DepthModel
+    size: int
+    dtype: type
+    channels: int
+    multi: bool
+
+
+POSE_SPECS: dict[str, PoseSpec] = {
+    POSE_LIGHTNING.id: PoseSpec(POSE_LIGHTNING, 192, np.uint8, 4, False),
+    POSE_THUNDER.id: PoseSpec(POSE_THUNDER, 256, np.int32, 3, False),
+    POSE_MULTIPOSE.id: PoseSpec(POSE_MULTIPOSE, 256, np.int32, 3, True),
+}
+POSE_MODELS: tuple[DepthModel, ...] = tuple(spec.model for spec in POSE_SPECS.values())
+DEFAULT_POSE = POSE_MULTIPOSE.id
 
 SEGMENT_SIZE = 256
-POSE_SIZE = 192
+# A person smaller than this fraction of the frame is skipped: below it the
+# joints are too close together for the parts to survive the feather.
+MIN_FIGURE_SPAN = 0.12
 
 # MoveNet's 17 COCO keypoints, in output order.
 KEYPOINTS = (
@@ -93,9 +136,6 @@ MODEL_DETAIL = 0.30
 # reads as parts bouncing against each other. Anatomical plausibility is
 # secondary here -- this is a stylistic control, and the point is separation.
 PART_DEPTHS: dict[str, float] = {
-    "nose": 0.90,
-    "left_eye": 0.80, "right_eye": 0.80,
-    "left_ear": 0.20, "right_ear": 0.20,
     "left_shoulder": 0.30, "right_shoulder": 0.30,
     "chest": 1.00,
     "waist": -0.20,
@@ -122,8 +162,16 @@ class BodyReliefUnavailable(RuntimeError):
     """Raised when the picture has no figure this can work on."""
 
 
-def models_ready() -> bool:
-    return all(has_file(model) for model in BODY_MODELS)
+def pose_spec(pose_id: str) -> PoseSpec:
+    return POSE_SPECS.get(pose_id, POSE_SPECS[DEFAULT_POSE])
+
+
+def required_models(pose_id: str) -> tuple[DepthModel, ...]:
+    return (SEGMENT_MODEL, pose_spec(pose_id).model)
+
+
+def models_ready(pose_id: str = DEFAULT_POSE) -> bool:
+    return all(has_file(m) for m in required_models(pose_id))
 
 
 def _rgb(image: QImage) -> np.ndarray:
@@ -146,34 +194,54 @@ def person_mask(rgb: np.ndarray) -> np.ndarray:
     return cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
-def pose_keypoints(rgb: np.ndarray) -> dict[str, Keypoint]:
-    """Landmarks in pixel coordinates, keyed by name.
+def pose_people(rgb: np.ndarray, pose_id: str) -> list[dict[str, Keypoint]]:
+    """Landmarks per figure, in pixel coordinates.
 
-    MoveNet expects a square input, so the image is letterboxed rather than
-    stretched: squashing a portrait to a square moves every joint and the
-    landmarks come back in the wrong places.
+    The image is letterboxed into a square rather than stretched: squashing a
+    portrait moves every joint and the landmarks come back in the wrong places.
     """
-    session = open_session(file_path(POSE_MODEL), POSE_MODEL.id)
+    spec = pose_spec(pose_id)
+    session = open_session(file_path(spec.model), spec.model.id)
     height, width = rgb.shape[:2]
     side = max(height, width)
     canvas = np.zeros((side, side, 3), np.uint8)
     off_y, off_x = (side - height) // 2, (side - width) // 2
     canvas[off_y:off_y + height, off_x:off_x + width] = rgb
 
-    square = cv2.resize(canvas, (POSE_SIZE, POSE_SIZE), interpolation=cv2.INTER_LINEAR)
-    # This export takes uint8 NHWC with a fourth (alpha) channel.
-    tensor = np.dstack([square, np.full((POSE_SIZE, POSE_SIZE, 1), 255, np.uint8)])[None]
-    name = session.get_inputs()[0].name
-    raw = session.run([session.get_outputs()[0].name], {name: tensor})[0]
-    rows = np.squeeze(raw).reshape(-1, 3)
+    square = cv2.resize(canvas, (spec.size, spec.size), interpolation=cv2.INTER_LINEAR)
+    if spec.channels == 4:
+        square = np.dstack([square, np.full((spec.size, spec.size, 1), 255, np.uint8)])
+    tensor = square[None].astype(spec.dtype)
+    raw = session.run(
+        [session.get_outputs()[0].name], {session.get_inputs()[0].name: tensor}
+    )[0]
 
-    found: dict[str, Keypoint] = {}
-    for i, part in enumerate(KEYPOINTS):
-        y_norm, x_norm, score = (float(v) for v in rows[i])
-        if score < MIN_CONFIDENCE:
+    # Single-pose exports give (1, 1, 17, 3); MultiPose gives (1, 6, 56), where
+    # each row is 17 keypoints followed by a bounding box and its score.
+    rows = np.squeeze(raw)
+    people_raw = (
+        [r[:51].reshape(17, 3) for r in rows.reshape(-1, 56)]
+        if spec.multi
+        else [rows.reshape(17, 3)]
+    )
+
+    people: list[dict[str, Keypoint]] = []
+    for kp_raw in people_raw:
+        found: dict[str, Keypoint] = {}
+        for i, part in enumerate(KEYPOINTS):
+            y_norm, x_norm, score = (float(v) for v in kp_raw[i])
+            if score < MIN_CONFIDENCE:
+                continue
+            found[part] = Keypoint(x_norm * side - off_x, y_norm * side - off_y, score)
+        if len(found) < MIN_KEYPOINTS:
             continue
-        found[part] = Keypoint(x_norm * side - off_x, y_norm * side - off_y, score)
-    return found
+        ys = [p.y for p in found.values()]
+        xs = [p.x for p in found.values()]
+        span = max(max(ys) - min(ys), max(xs) - min(xs))
+        if span < side * MIN_FIGURE_SPAN:
+            continue
+        people.append(found)
+    return people
 
 
 def _midpoint(a: Keypoint, b: Keypoint, t: float = 0.5) -> Keypoint:
@@ -182,37 +250,6 @@ def _midpoint(a: Keypoint, b: Keypoint, t: float = 0.5) -> Keypoint:
         a.y + (b.y - a.y) * t,
         min(a.score, b.score),
     )
-
-
-def _control_points(kp: dict[str, Keypoint]) -> dict[str, Keypoint]:
-    """Landmarks plus the parts MoveNet has no keypoint for.
-
-    There is no chest, waist, thigh or shin landmark, and those are exactly the
-    regions worth separating, so they are interpolated between the joints that
-    bracket them.
-    """
-    points = dict(kp)
-
-    shoulders = [kp[s] for s in ("left_shoulder", "right_shoulder") if s in kp]
-    hips = [kp[s] for s in ("left_hip", "right_hip") if s in kp]
-    if shoulders and hips:
-        shoulder_mid = shoulders[0] if len(shoulders) == 1 else _midpoint(*shoulders)
-        hip_mid = hips[0] if len(hips) == 1 else _midpoint(*hips)
-        points["chest"] = _midpoint(shoulder_mid, hip_mid, 0.25)
-        points["waist"] = _midpoint(shoulder_mid, hip_mid, 0.62)
-        points["pelvis"] = hip_mid
-
-    for side in ("left", "right"):
-        for name, a, b, t in (
-            ("upper_arm", "shoulder", "elbow", 0.5),
-            ("forearm", "elbow", "wrist", 0.5),
-            ("thigh", "hip", "knee", 0.5),
-            ("shin", "knee", "ankle", 0.45),
-        ):
-            first, second = f"{side}_{a}", f"{side}_{b}"
-            if first in kp and second in kp:
-                points[f"{side}_{name}"] = _midpoint(kp[first], kp[second], t)
-    return points
 
 
 def _segments(kp: dict[str, Keypoint]) -> list[tuple[Keypoint, Keypoint, float, float]]:
@@ -249,10 +286,9 @@ def _segments(kp: dict[str, Keypoint]) -> list[tuple[Keypoint, Keypoint, float, 
         add(f"{side}_hip", f"{side}_knee", PART_DEPTHS["left_thigh"], 1.0)
         add(f"{side}_knee", f"{side}_ankle", PART_DEPTHS["left_shin"], 0.8)
 
-    for eye in ("nose", "left_eye", "right_eye"):
-        if eye in kp:
-            bones.append((kp[eye], kp[eye], PART_DEPTHS["nose"], 0.9))
-            break
+    # No head bone. Displacing a face by an amount of its own tears the
+    # features apart and it is the first thing the eye goes to, so the head
+    # keeps whatever depth the model gave it and simply travels with the body.
     return bones
 
 
@@ -303,8 +339,55 @@ def _relief_field(
     return total / np.maximum(weight, 1e-6), coverage
 
 
+def _suggest_motion(
+    depth: np.ndarray,
+    solid: np.ndarray,
+    people: list[dict[str, Keypoint]],
+    span_fraction: float,
+) -> dict[str, float]:
+    """Motion settings derived from this particular scene.
+
+    Fixed values would be wrong for most pictures: a head-and-shoulders crop
+    and a full-length figure across a room need very different travel to read
+    the same. Everything here comes off the picture.
+    """
+    # Focus is the plane that does not move. Left mid-frame it sits behind the
+    # figure, so every part is on the same side of it and they all slide
+    # together, differing only in amount. On the figure's own median depth the
+    # chest is in front and the hips behind, and they travel opposite ways.
+    focus = float(np.median(depth[solid])) if solid.any() else 0.5
+
+    # How the figure sits in frame. A wide pose -- seated, arms out, reclining
+    # -- has parts spread across both axes and can carry vertical travel; a
+    # narrow standing figure only reads sideways.
+    widths, heights = [], []
+    for kp in people:
+        xs = [pt.x for pt in kp.values()]
+        ys = [pt.y for pt in kp.values()]
+        widths.append(max(xs) - min(xs))
+        heights.append(max(ys) - min(ys))
+    aspect = (max(widths) / max(max(heights), 1.0)) if widths else 0.5
+
+    # A figure filling the frame needs less travel than a distant one: the same
+    # pixel offset reads as far more movement when the subject is large.
+    fill = min(1.0, max(0.05, span_fraction))
+    return {
+        "focus_depth": max(0.05, min(0.95, focus)),
+        "motion_scale_x": 1.0,
+        "motion_scale_y": float(min(0.75, max(0.12, aspect * 0.55))),
+        # Zoom travels along the same axis as the part separation and muddies
+        # it, so it is held back most where the figure is largest.
+        "zoom_strength": float(max(0.04, 0.28 - 0.24 * fill)),
+        "layer_intensity": float(min(0.85, max(0.38, 0.85 - 0.45 * fill))),
+        "duration": float(min(7.5, max(2.5, 2.6 + 4.2 * fill))),
+    }
+
+
 def body_part_depth(
-    image: QImage, base_depth: np.ndarray, strength: float | None = None
+    image: QImage,
+    base_depth: np.ndarray,
+    strength: float | None = None,
+    pose_id: str = DEFAULT_POSE,
 ) -> np.ndarray:
     """Rebuild the depth inside a figure from its pose.
 
@@ -321,45 +404,68 @@ def body_part_depth(
             "No person found in this image. Body Relief needs a visible figure."
         )
 
-    kp = pose_keypoints(rgb)
-    if len(kp) < MIN_KEYPOINTS:
+    people = pose_people(rgb, pose_id)
+    if not people:
         raise BodyReliefUnavailable(
-            f"Only {len(kp)} body landmarks were confident enough to use. "
-            "Body Relief needs a mostly unobstructed figure."
+            "Found a figure but not its pose. Body Relief needs a mostly "
+            "unobstructed person, large enough in the frame to place joints on."
         )
 
-    ys = [p.y for p in kp.values()]
-    xs = [p.x for p in kp.values()]
-    span = max(max(ys) - min(ys), max(xs) - min(xs), 1.0)
+    scale = min(1.0, 384.0 / max(height, width))
+    small_shape = (max(1, int(height * scale)), max(1, int(width * scale)))
 
-    bones = _segments(kp)
-    if not bones:
+    # Every figure the pose model found gets its own bones, and they are
+    # painted into one field. With a single-person model there is just the one.
+    all_bones: list[tuple[Keypoint, Keypoint, float, float]] = []
+    spans: list[float] = []
+    heads: list[tuple[float, float, float]] = []
+    for kp in people:
+        bones = _segments(kp)
+        if not bones:
+            continue
+        ys = [pt.y for pt in kp.values()]
+        xs = [pt.x for pt in kp.values()]
+        span = max(max(ys) - min(ys), max(xs) - min(xs), 1.0)
+        spans.append(span)
+        all_bones.extend(
+            (
+                Keypoint(a_.x * scale, a_.y * scale, a_.score),
+                Keypoint(b_.x * scale, b_.y * scale, b_.score),
+                depth,
+                thick,
+            )
+            for a_, b_, depth, thick in bones
+        )
+        head = [kp[n] for n in ("nose", "left_eye", "right_eye", "left_ear", "right_ear") if n in kp]
+        if head:
+            hx = sum(pt.x for pt in head) / len(head)
+            hy = sum(pt.y for pt in head) / len(head)
+            heads.append((hx * scale, hy * scale, span * scale * 0.16))
+
+    if not all_bones:
         raise BodyReliefUnavailable(
             "Found a figure but could not place its limbs. Body Relief needs "
             "the torso and at least one arm or leg visible."
         )
+    span = max(spans)
 
-    # Built on a proxy: the field is smooth by construction, and the distance
-    # loop costs one full-resolution array per bone otherwise.
-    scale = min(1.0, 384.0 / max(height, width))
-    small_shape = (max(1, int(height * scale)), max(1, int(width * scale)))
-    scaled = [
-        (
-            Keypoint(a.x * scale, a.y * scale, a.score),
-            Keypoint(b.x * scale, b.y * scale, b.score),
-            depth,
-            thick,
-        )
-        for a, b, depth, thick in bones
-    ]
-    field, coverage = _relief_field(scaled, small_shape, span * scale)
+    field, coverage = _relief_field(all_bones, small_shape, span * scale)
+
+    # Hold the relief off the face. A displaced face pulls its features apart
+    # and it is the first thing anyone looks at, so the head keeps the depth
+    # the model gave it and travels with the body instead.
+    for hx, hy, radius in heads:
+        yy, xx = np.mgrid[0:small_shape[0], 0:small_shape[1]].astype(np.float32)
+        keep = 1.0 - np.exp(-((xx - hx) ** 2 + (yy - hy) ** 2) / (2.0 * radius * radius))
+        coverage = coverage * keep
+
     if scale < 1.0:
         field = cv2.resize(field, (width, height), interpolation=cv2.INTER_LINEAR)
         coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_LINEAR)
 
-    # Keep the figure where the depth model put it, and give it the pose field
-    # for its shape. A little of the model's own within-figure detail rides on
-    # top so faces and clothing folds do not go completely flat.
+    # Keep the figures where the depth model put them, and give them the pose
+    # field for their shape. A little of the model's own detail rides on top so
+    # clothing folds do not go completely flat.
     solid = mask > 0.5
     centre = float(np.median(base_depth[solid]))
     detail = base_depth - cv2.GaussianBlur(
@@ -375,24 +481,18 @@ def body_part_depth(
     lo, hi = (float(v) for v in np.percentile(blended, (2.0, 98.0)))
     if hi - lo < 1e-6:
         return base_depth
+
+    figure_frac = float(solid.mean())
     logger.info(
-        "Body relief: %d landmarks, %d bones, figure %.1f%% of frame, spread %.2f",
-        len(kp), len(bones), float(solid.mean()) * 100, spread,
+        "Body relief: %d figures, %d bones, %.1f%% of frame, spread %.2f",
+        len(spans), len(all_bones), figure_frac * 100, spread,
     )
-    # Surfaced in the status bar, so a run that quietly did nothing is
-    # distinguishable from one that worked.
     body_part_depth.last_report = (
-        f"{len(kp)} landmarks, {len(bones)} body parts, "
-        f"figure {float(solid.mean()) * 100:.0f}% of frame"
+        f"{len(spans)} figure{'s' if len(spans) != 1 else ''}, "
+        f"{len(all_bones)} body parts, {figure_frac * 100:.0f}% of frame"
     )
     result = np.clip((blended - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
-
-    # The motion controls cannot be left where they were. Focus sets the plane
-    # that does not move, and everything is displaced by its distance from it.
-    # Left at the middle of the frame it sits behind the figure, so every part
-    # is on the same side of it and they all slide the same way -- differing
-    # only in how much. Put on the figure's own median depth, the chest is in
-    # front of the plane and the hips behind it, so they travel in opposite
-    # directions, which is what reads as parts moving against each other.
-    body_part_depth.suggested_focus = float(np.median(result[solid]))
+    body_part_depth.suggested_motion = _suggest_motion(
+        result, solid, people, span / max(height, width)
+    )
     return result

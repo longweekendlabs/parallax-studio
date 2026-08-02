@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.core import depth_model
+from app.core import body_model, depth_model
 from app.core.exporter import is_cuda_available, is_nvenc_available
 from app.ui.theme import (
     C_ACCENT,
@@ -128,7 +128,22 @@ class SettingsDialog(QDialog):
         layout.addWidget(_rule())
         layout.addSpacing(6)
 
-        layout.addWidget(_section("BODY RELIEF STRENGTH"))
+        layout.addWidget(_section("BODY RELIEF"))
+        self.pose_combo = QComboBox()
+        for spec in body_model.POSE_SPECS.values():
+            suffix = "" if depth_model.has_file(spec.model) else "  (not downloaded)"
+            self.pose_combo.addItem(spec.model.label + suffix, spec.model.id)
+        index = self.pose_combo.findData(self._settings.pose_model)
+        self.pose_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.pose_combo.currentIndexChanged.connect(self._sync_pose_hint)
+        layout.addWidget(self.pose_combo)
+        self.pose_hint = _hint("")
+        layout.addWidget(self.pose_hint)
+        if not depth_model.is_available():
+            self.pose_combo.setEnabled(False)
+        self._sync_pose_hint()
+
+        layout.addSpacing(6)
         strength_row = QHBoxLayout()
         self.relief_slider = QSlider(Qt.Orientation.Horizontal)
         # Tenths. Above ~1.3 the figure starts reading as rubbery rather than
@@ -188,6 +203,14 @@ class SettingsDialog(QDialog):
             "layers fall back to the CPU automatically."
         )
 
+    def _sync_pose_hint(self):
+        spec = body_model.pose_spec(self.pose_combo.currentData())
+        text = spec.model.note
+        if not depth_model.has_file(spec.model):
+            size = spec.model.approx_bytes // 1048576
+            text += f"  Downloads once ({size} MB) the first time you press Body Relief."
+        self.pose_hint.setText(text)
+
     def _sync_model_hint(self):
         model = depth_model.get_model(self.model_combo.currentData())
         text = model.note
@@ -219,4 +242,6 @@ class SettingsDialog(QDialog):
         if self.model_combo.isEnabled():
             self._settings.depth_model = self.model_combo.currentData()
         self._settings.body_relief_strength = self.relief_slider.value() / 10.0
+        if self.pose_combo.isEnabled():
+            self._settings.pose_model = self.pose_combo.currentData()
         return self._settings
