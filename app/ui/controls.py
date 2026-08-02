@@ -813,6 +813,11 @@ class ControlsPanel(QWidget):
         self.layer_intensity.setValue(max(0, min(100, int(round(settings.layer_intensity * 100)))), emit=False)
         self._preview_fps = settings.preview_fps
 
+    def set_preview_fps(self, fps: int):
+        """Preview rate lives in the transport bar, but is carried in
+        MotionSettings, so the panel has to hold it across re-emits."""
+        self._preview_fps = int(fps)
+
     def set_selected_layer_motion(self, layer, locked: bool = False):
         self.focus_depth.set_value(layer.focus_depth, emit=False)
         self.motion_path.set_value((layer.motion_scale_x, layer.motion_scale_y), emit=False)
