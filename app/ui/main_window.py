@@ -452,7 +452,8 @@ class MainWindow(QMainWindow):
         self.controls.clearDepthRequested.connect(self._clear_selected_depth)
         self.controls.invertDepthRequested.connect(self._invert_selected_depth)
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
-        self.controls.autoDepthRequested.connect(self._auto_depth_selected)
+        self.controls.autoDepthRequested.connect(lambda: self._auto_depth_selected(False))
+        self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
         self.canvas.set_brush_preview(
             self.brush_settings.size,
             self.brush_settings.opacity,
@@ -1518,7 +1519,7 @@ class MainWindow(QMainWindow):
             self._refresh_layers(refresh_panel=False)
             self.status_controller.info("Redid depth edit")
 
-    def _auto_depth_selected(self):
+    def _auto_depth_selected(self, relief: bool = False):
         layer = self._selected_layer()
         if layer is None:
             self.status_controller.warning("Select a layer before generating depth")
@@ -1530,14 +1531,21 @@ class MainWindow(QMainWindow):
 
         if use_model:
             # Downloads on first use, then runs inference; both report progress.
-            dialog = DepthModelDialog(layer.image, model_id, self)
+            dialog = DepthModelDialog(layer.image, model_id, self, relief=relief)
             dialog.set_image(layer.image)
             dialog.start()
             if dialog.exec() != QDialog.DialogCode.Accepted or dialog.depth_map is None:
                 return
             push_depth_undo(layer)
             layer.depth_map = dialog.depth_map
-            source = model.label
+            source = f"{model.label}, body relief" if relief else model.label
+        elif relief:
+            # Body relief needs a model that can find the subject; the
+            # brightness heuristic has no idea where one is.
+            self.status_controller.warning(
+                "Body Relief needs a depth model. Pick one in Settings."
+            )
+            return
         else:
             auto_depth(layer)
             source = "built-in heuristic"

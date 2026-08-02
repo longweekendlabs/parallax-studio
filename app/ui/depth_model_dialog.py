@@ -31,10 +31,11 @@ class _Worker(QObject):
     finished = Signal(object)          # np.ndarray depth map
     error = Signal(str)
 
-    def __init__(self, image: QImage, model_id: str):
+    def __init__(self, image: QImage, model_id: str, relief: bool = False):
         super().__init__()
         self._image = image
         self._model_id = model_id
+        self._relief = relief
         self._cancelled = False
 
     def cancel(self):
@@ -62,7 +63,7 @@ class _Worker(QObject):
 
             # Indeterminate: inference is a single opaque call.
             self.progress.emit(0, 0, "Analysing image depth...")
-            depth = depth_model.estimate_depth(self._image, self._model_id)
+            depth = depth_model.estimate_depth(self._image, self._model_id, relief=self._relief)
             if self._cancelled:
                 return
             self.finished.emit(depth)
@@ -75,16 +76,18 @@ class _Worker(QObject):
 class DepthModelDialog(QDialog):
     """Progress window for the one-time model download plus depth estimation."""
 
-    def __init__(self, image: QImage, model_id: str, parent=None):
+    def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
         self._model_id = model_id
+        self._relief = relief
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
         model = depth_model.get_model(model_id)
         already = depth_model.is_downloaded(model_id)
-        self.setWindowTitle("Auto Depth" if already else "Download Depth Model")
+        title = "Body Relief" if relief else "Auto Depth"
+        self.setWindowTitle(title if already else "Download Depth Model")
         self.setModal(True)
         self.setFixedWidth(430)
         self.setStyleSheet(
@@ -139,7 +142,7 @@ class DepthModelDialog(QDialog):
         layout.addLayout(row)
 
     def start(self):
-        self._worker = _Worker(self._image_ref, self._model_id)
+        self._worker = _Worker(self._image_ref, self._model_id, self._relief)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
