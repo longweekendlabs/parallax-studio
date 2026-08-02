@@ -338,6 +338,7 @@ def soften_for_parallax(
 def estimate_depth(
     image: QImage, model_id: str, relief: bool = False,
     relief_strength: float | None = None,
+    pose_id: str | None = None,
 ) -> np.ndarray:
     """Run the model and return a float32 depth map, 0 far to 1 near.
 
@@ -384,5 +385,8 @@ def estimate_depth(
         # Feathered against the rebuilt map, not the model's own: measured,
         # taking edges only from the original leaves the part structure's own
         # gradients unfeathered and the sampling grid folds again (-5.2).
-        depth = body_model.body_part_depth(image, depth, relief_strength)
+        depth = body_model.body_part_depth(
+            image, depth, relief_strength,
+            pose_id or body_model.DEFAULT_POSE,
+        )
     return soften_for_parallax(depth)

@@ -32,12 +32,14 @@ class _Worker(QObject):
     error = Signal(str)
 
     def __init__(self, image: QImage, model_id: str, relief: bool = False,
-                 relief_strength: float | None = None):
+                 relief_strength: float | None = None,
+                 pose_id: str | None = None):
         super().__init__()
         self._image = image
         self._model_id = model_id
         self._relief = relief
         self._relief_strength = relief_strength
+        self._pose_id = pose_id
         self._cancelled = False
 
     def cancel(self):
@@ -70,7 +72,9 @@ class _Worker(QObject):
                 # depth model; each is fetched once and kept.
                 from app.core import body_model
 
-                for extra in body_model.BODY_MODELS:
+                for extra in body_model.required_models(
+                    self._pose_id or body_model.DEFAULT_POSE
+                ):
                     if not self._fetch(extra):
                         return
 
@@ -86,6 +90,7 @@ class _Worker(QObject):
             depth = depth_model.estimate_depth(
                 self._image, self._model_id, relief=self._relief,
                 relief_strength=self._relief_strength,
+                pose_id=self._pose_id,
             )
             if self._cancelled:
                 return
@@ -100,12 +105,14 @@ class DepthModelDialog(QDialog):
     """Progress window for the one-time model download plus depth estimation."""
 
     def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False,
-                 relief_strength: float | None = None):
+                 relief_strength: float | None = None,
+                 pose_id: str | None = None):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
         self._model_id = model_id
         self._relief = relief
         self._relief_strength = relief_strength
+        self._pose_id = pose_id
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
@@ -114,7 +121,9 @@ class DepthModelDialog(QDialog):
         if relief:
             from app.core import body_model
 
-            already = already and body_model.models_ready()
+            already = already and body_model.models_ready(
+                pose_id or body_model.DEFAULT_POSE
+            )
         title = "Body Relief" if relief else "Auto Depth"
         self.setWindowTitle(title if already else "Download Depth Model")
         self.setModal(True)
@@ -175,7 +184,8 @@ class DepthModelDialog(QDialog):
 
     def start(self):
         self._worker = _Worker(
-            self._image_ref, self._model_id, self._relief, self._relief_strength
+            self._image_ref, self._model_id, self._relief,
+            self._relief_strength, self._pose_id,
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
