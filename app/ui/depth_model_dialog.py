@@ -31,11 +31,13 @@ class _Worker(QObject):
     finished = Signal(object)          # np.ndarray depth map
     error = Signal(str)
 
-    def __init__(self, image: QImage, model_id: str, relief: bool = False):
+    def __init__(self, image: QImage, model_id: str, relief: bool = False,
+                 relief_strength: float | None = None):
         super().__init__()
         self._image = image
         self._model_id = model_id
         self._relief = relief
+        self._relief_strength = relief_strength
         self._cancelled = False
 
     def cancel(self):
@@ -81,7 +83,10 @@ class _Worker(QObject):
                 "Finding the body and its parts..." if self._relief
                 else "Analysing image depth...",
             )
-            depth = depth_model.estimate_depth(self._image, self._model_id, relief=self._relief)
+            depth = depth_model.estimate_depth(
+                self._image, self._model_id, relief=self._relief,
+                relief_strength=self._relief_strength,
+            )
             if self._cancelled:
                 return
             self.finished.emit(depth)
@@ -94,11 +99,13 @@ class _Worker(QObject):
 class DepthModelDialog(QDialog):
     """Progress window for the one-time model download plus depth estimation."""
 
-    def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False):
+    def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False,
+                 relief_strength: float | None = None):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
         self._model_id = model_id
         self._relief = relief
+        self._relief_strength = relief_strength
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
@@ -134,7 +141,10 @@ class DepthModelDialog(QDialog):
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(12)
 
-        heading = QLabel(model.label)
+        # Heading names the operation once the models are on disk. Showing the
+        # model and its size every run made a routine 2-second progress window
+        # look like it was downloading 50 MB again on every click.
+        heading = QLabel(title if already else model.label)
         heading.setStyleSheet(f"color: {C_TEXT_MAIN}; font-size: 14px; font-weight: 700;")
         layout.addWidget(heading)
 
@@ -164,7 +174,9 @@ class DepthModelDialog(QDialog):
         layout.addLayout(row)
 
     def start(self):
-        self._worker = _Worker(self._image_ref, self._model_id, self._relief)
+        self._worker = _Worker(
+            self._image_ref, self._model_id, self._relief, self._relief_strength
+        )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

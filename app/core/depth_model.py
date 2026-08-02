@@ -238,7 +238,9 @@ DESIGN_AMPLITUDE = 0.06
 DESIGN_INTENSITY = 0.4875
 FOLD_MARGIN = 0.85
 
-def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
+def soften_for_parallax(
+    depth: np.ndarray, edge_source: np.ndarray | None = None
+) -> np.ndarray:
     """Make a model depth map survive being used as a displacement map.
 
     The model draws a subject's outline as a near-vertical step in depth. A
@@ -269,6 +271,27 @@ def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
         small = cv2.resize(depth, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     else:
         small = depth
+
+    # Where to look for edges worth feathering. Body Relief passes the depth
+    # model's own map here: the tearing risk lives on the figure's outline,
+    # which that map already has, while the part structure Body Relief writes
+    # inside the figure is broad and safe. Measuring edges on the rebuilt map
+    # instead cost about half the part separation, because the outline's
+    # dilated feather band reaches 40px inside the figure and smooths the parts
+    # sitting near it.
+    if edge_source is None:
+        small_edges = small
+    elif scale < 1.0:
+        small_edges = cv2.resize(
+            edge_source, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA
+        )
+    else:
+        small_edges = edge_source
+    if edge_source is not None:
+        # Same compression the map itself got, so the gradient threshold below
+        # means the same thing for both.
+        small_edges = 0.5 + (small_edges - 0.5) * PARALLAX_RANGE
+
     small_sigma = max(0.6, sigma * scale)
     small_blur = cv2.GaussianBlur(small, (0, 0), sigmaX=small_sigma)
 
@@ -291,8 +314,8 @@ def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
     # replaced is, and reading it off the blurred copy makes a wider feather
     # look flatter, which drives the weight to zero and leaves the step intact.
     grad = cv2.magnitude(
-        cv2.Sobel(small, cv2.CV_32F, 1, 0, ksize=3),
-        cv2.Sobel(small, cv2.CV_32F, 0, 1, ksize=3),
+        cv2.Sobel(small_edges, cv2.CV_32F, 1, 0, ksize=3),
+        cv2.Sobel(small_edges, cv2.CV_32F, 0, 1, ksize=3),
     ) * (scale / 8.0)
     small_weight = np.clip(grad / safe_grad, 0.0, 1.0)
     # The band over the fold threshold is only a few pixels wide. Smoothing it
@@ -312,7 +335,10 @@ def soften_for_parallax(depth: np.ndarray) -> np.ndarray:
     return np.clip(depth, 0.0, 1.0).astype(np.float32)
 
 
-def estimate_depth(image: QImage, model_id: str, relief: bool = False) -> np.ndarray:
+def estimate_depth(
+    image: QImage, model_id: str, relief: bool = False,
+    relief_strength: float | None = None,
+) -> np.ndarray:
     """Run the model and return a float32 depth map, 0 far to 1 near.
 
     The result is the same size as ``image`` and matches the app's convention
@@ -355,5 +381,8 @@ def estimate_depth(image: QImage, model_id: str, relief: bool = False) -> np.nda
         # session helpers.
         from app.core import body_model
 
-        depth = body_model.body_part_depth(image, depth)
+        # Feathered against the rebuilt map, not the model's own: measured,
+        # taking edges only from the original leaves the part structure's own
+        # gradients unfeathered and the sampling grid folds again (-5.2).
+        depth = body_model.body_part_depth(image, depth, relief_strength)
     return soften_for_parallax(depth)
