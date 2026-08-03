@@ -13,7 +13,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 
-from app.core.animator import motion_offset
+from app.core.animator import motion_amplitude, motion_offset
 from app.core.compositor import composite_animated_layers
 from app.core.depth import ensure_depth_map
 from app.core.layer import Layer
