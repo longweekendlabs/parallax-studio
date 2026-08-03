@@ -2,6 +2,8 @@
 # PyInstaller spec for Parallax Studio — macOS Apple Silicon (.app + .dmg)
 # Run via:  ./build_macos.sh   (or: pyinstaller parallax_studio.spec)
 
+import os
+
 from PyInstaller.utils.hooks import collect_data_files
 
 # imageio_ffmpeg bundles its own ARM64 ffmpeg binary; collect it explicitly
@@ -121,7 +123,13 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="Parallax Studio.app",
-    icon=None,           # Phase 9: add assets/icons/app.icns
+    # Generated from the PNG by the release workflow. Absent on a machine that
+    # has not run that step, in which case the bundle takes the default icon.
+    icon=(
+        "assets/icons/parallax-studio.icns"
+        if os.path.exists("assets/icons/parallax-studio.icns")
+        else None
+    ),
     bundle_identifier="com.longweekendlabs.parallaxstudio",
     version="0.9.8",
     info_plist={
