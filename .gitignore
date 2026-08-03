@@ -6,8 +6,10 @@ __pycache__/
 .DS_Store
 dist/
 build/
+release/
 *.spec
 !parallax_studio_linux.spec
+!parallax_studio_windows.spec
 
 # Local agent and handoff notes
 AGENTS.md
