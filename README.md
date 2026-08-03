@@ -4,130 +4,101 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/longweekendlabs/parallax-studio?style=flat-square)](https://github.com/longweekendlabs/parallax-studio/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Platform: Linux + macOS](https://img.shields.io/badge/Platform-Linux%20%2B%20macOS-lightgrey?style=flat-square)](#platform-support)
-[![Offline: no cloud APIs](https://img.shields.io/badge/AI-runs%20offline-2ea44f?style=flat-square)](#depth-without-painting)
-
-Parallax Studio is for visual novel art, scene illustrations, character cutouts, and any workflow where you want motion out of still layers without opening a compositing suite.
-
-Every model it uses runs locally. Nothing is uploaded, and there are no API keys or accounts.
+[![Windows, Linux, macOS](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square)](#download)
+[![AI runs offline](https://img.shields.io/badge/AI-runs%20offline-2ea44f?style=flat-square)](#depth-without-painting)
 
 ![Parallax Studio preview](docs/assets/parallax-studio-ui.png)
 
+Point it at a photo or a piece of layered art, press one button, and it works out what is near and what is far. Tune the motion, watch it loop live, export an MP4 or GIF.
+
+No account, no API key, nothing uploaded. The depth and pose models download once and then run on your own hardware.
+
 ---
-
-## Features
-
-- **Paint depth by hand** — Brush with size, hardness, strength and depth value, over a colour-ramped overlay that shows what you have painted.
-- **Import multiple layers** — PNG, JPG, JPEG and WebP, moved and scaled directly on the canvas.
-- **Live preview** — Plays at 24, 30 or 60 fps, and reports the rate it is really achieving so the preview can be trusted against the export.
-- **Export** — MP4 or GIF, with optional NVIDIA GPU rendering and NVENC encoding when the hardware is present.
-- **Projects** — `.parlx` files keep layer order, transforms, motion settings and depth data.
-
-## Depth without painting
-
-Two buttons generate depth, both from models downloaded on first use and cached afterwards.
-
-**Auto Depth** runs Depth Anything V2 and separates a subject from its background properly. The result is feathered at depth discontinuities: a hard silhouette does not stretch under displacement, it tears, and the sampling grid folds back over itself along the outline.
-
-**Body Relief** is for photographs of people. It finds every figure and its pose, then rebuilds the depth *inside* each one so chest, waist, hips, arms and legs each carry their own parallax instead of the figure sliding as a single cutout. It touches the subject only: backgrounds and faces come out bit-for-bit identical to Auto Depth. Strength and pose model are in Settings.
-
-| Model | Size | Licence | Used for |
-|---|---|---|---|
-| Depth Anything V2 Small | 50 MB | Apache-2.0 | Auto Depth |
-| MediaPipe Selfie Segmentation | 0.5 MB | Apache-2.0 | finding the subject |
-| MoveNet MultiPose | 19 MB | Apache-2.0 | up to 6 figures, default |
-| MoveNet Thunder / Lightning | 25 / 9 MB | Apache-2.0 | single figure, optional |
-
-## Platform Support
-
-| Platform | Status |
-|---|---|
-| **Linux x86_64** | Supported. RPM and portable tarball built by `build_rpm.sh` / `build_linux.sh`. |
-| **macOS Apple Silicon** | Supported. `.app` and `.dmg` built by `build_macos.sh`, macOS 12+. |
-| **Windows** | Not built yet. It runs from source; there is no packaged installer. |
-
-Built with:
-- Python 3.11-3.13
-- PySide6 (Qt)
-- NumPy & OpenCV
-- ONNX Runtime, for the depth and pose models
-- imageio & Pillow
 
 ## Download
 
-Head to the **[Releases page](https://github.com/longweekendlabs/parallax-studio/releases/latest)**.
+### **[Get the latest release →](https://github.com/longweekendlabs/parallax-studio/releases/latest)**
 
-| Platform | Package | Notes |
+| Platform | Package |
+|---|---|
+| **Windows** 64-bit | Installer `.exe`, or portable `.zip` |
+| **Linux** x86_64 | `.rpm` for Fedora and RHEL, `.deb` for Debian and Ubuntu, or a portable `.tar.gz` |
+| **macOS** Apple Silicon | `.dmg`, or `.zip` app bundle. macOS 12 or newer |
+
+The Windows installer is per-user, so it never asks for administrator rights.
+
+Every download is also laid out by platform on the **[project page](https://longweekendlabs.github.io/parallax-studio/)**.
+
+---
+
+## What it does
+
+### Depth without painting
+
+Two buttons generate depth for you.
+
+**Auto Depth** runs Depth Anything V2 and separates a subject from its background properly. The result is feathered where it needs to be: a hard silhouette does not stretch under displacement, it tears, and the sampling grid folds back over itself along the outline. Feathering is what stops that.
+
+**Body Relief** is for photographs of people. It finds every figure in the frame and its pose, then rebuilds the depth *inside* each one, so chest, waist, hips, arms and legs each carry their own parallax instead of the whole figure sliding about as a single cutout. It touches the subject only, leaving backgrounds and faces exactly as Auto Depth had them.
+
+### Or paint it yourself
+
+A depth brush with size, hardness, strength and depth value, over a colour-ramped overlay that actually shows what you have painted. Blue is far, cyan sits on the neutral plane, red is near. Undo and redo throughout.
+
+### Motion you can judge before you commit
+
+Focus, path, zoom, loop type, duration and intensity. The preview plays at 24, 30 or 60 fps and reports the rate it is really achieving, so what you judge is what you get. Body Relief also sets the motion controls to suit the depth it just generated, worked out from the scene rather than fixed defaults.
+
+### Export
+
+MP4 or GIF, at whatever resolution and frame rate you pick. On an NVIDIA machine it will use the GPU for rendering and NVENC for encoding once you enable them in Settings; the output is identical either way.
+
+---
+
+## The models
+
+Downloaded on first use and kept afterwards, around 70 MB in total. All Apache-2.0, so nothing here restricts what you do with the output.
+
+| Model | Size | Job |
 |---|---|---|
-| **Linux x86_64** | `.rpm` / `.tar.gz` | Built with `build_rpm.sh` and `build_linux.sh`. |
-| **macOS Apple Silicon** | `.dmg` / `.app` | macOS 12+ required. |
-| **Windows** | run from source | See Quick Start below. |
+| Depth Anything V2 Small | 50 MB | Auto Depth |
+| MediaPipe Selfie Segmentation | 0.5 MB | Finding the subject |
+| MoveNet MultiPose | 19 MB | Up to six figures. Default |
+| MoveNet Thunder | 25 MB | One figure, more precise joints |
+| MoveNet Lightning | 9 MB | One figure, fastest |
 
-The AI models are not bundled. They download on first use of Auto Depth or Body Relief and are kept on your machine afterwards.
+The pose model is selectable in Settings, as is how far Body Relief separates the parts.
 
-## Quick Start
+A larger Depth Anything V2 Base is offered as well, but it is CC-BY-NC-4.0 and labelled as such in the app: do not use its output commercially.
+
+---
+
+## Formats
+
+Imports PNG, JPG, JPEG and WebP. Exports MP4 and GIF.
+
+Projects save as `.parlx`, a JSON file holding layer order, transforms, motion settings and depth maps. Source images are referenced by path, so project files stay small.
+
+---
+
+## Building from source
+
+Requires Python 3.11 to 3.13.
 
 ```bash
-# Clone the repository
 git clone https://github.com/longweekendlabs/parallax-studio.git
 cd parallax-studio
-
-# Setup virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies and run
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
-## Building Locally
+Packaging: `build_rpm.sh` and `build_linux.sh` on Linux, `build_macos.sh` on macOS, `parallax_studio_windows.spec` with PyInstaller on Windows. Release builds for all three platforms come from `.github/workflows/release.yml`.
 
-To build a Linux RPM:
-
-```bash
-chmod +x build_rpm.sh
-./build_rpm.sh
-```
-
-The RPM lands in `dist/rpm/`. Install it with `sudo rpm -Uvh dist/rpm/parallax-studio-*.rpm`.
-
-To build a standalone macOS app bundle and disk image:
-
-```bash
-chmod +x build_macos.sh
-./build_macos.sh
-```
-
-The output will be located in `dist/Parallax Studio.app` and `dist/Parallax Studio.dmg`.
-
-To build a standalone Linux app directory:
-
-```bash
-chmod +x build_linux.sh
-./build_linux.sh
-```
-
-The output will be located in `dist/parallax-studio/`. Run it with:
-
-```bash
-./dist/parallax-studio/parallax-studio
-```
-
-If your distro's default `python3` is newer than the pinned dependency set supports, install Python 3.11 or 3.12 and run:
-
-```bash
-PYTHON_BIN=python3.11 ./build_linux.sh
-```
-
-## Project Format
-
-`.parlx` is a JSON project file that stores layer order, source paths, transforms, motion settings, and compressed depth maps. Source images are referenced by path to keep project files lightweight.
+---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
-
----
+MIT. See [LICENSE](LICENSE).
 
 Made with ♥ by **[Long Weekend Labs](https://github.com/longweekendlabs)**
