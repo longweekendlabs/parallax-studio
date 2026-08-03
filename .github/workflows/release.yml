@@ -20,6 +20,10 @@ on:
 
 permissions:
   contents: write
+  # actions: write is what lets the cleanup step below delete this run's
+  # artifacts. Without it the delete calls fail quietly and 1.2 GB of build
+  # artifacts sit against the 500 MB storage allowance.
+  actions: write
 
 env:
   APP_NAME: parallax-studio
@@ -195,7 +199,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq '.artifacts[].id' | while read -r id; do
+          # Every artifact in the repository, not just this run's: a failed
+          # attempt leaves its own behind, and those count too. Pages artifacts
+          # are managed by Pages and left alone.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            --jq '.artifacts[] | select(.expired == false) | select(.name != "github-pages") | .id' \
+            | while read -r id; do
+            echo "deleting artifact ${id}"
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" || true
           done
