@@ -7,11 +7,15 @@
 [![Windows, Linux, macOS](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square)](#download)
 [![AI runs offline](https://img.shields.io/badge/AI-runs%20offline-2ea44f?style=flat-square)](#depth-without-painting)
 
-![Parallax Studio preview](docs/assets/parallax-studio-ui.png)
+![A still landscape looping as a 2.5D parallax animation](docs/assets/parallax-demo.gif)
+
+*One still image, no layers, no masking. Auto Depth worked out the hills and the tree line, and that is the loop it exports.*
 
 Point it at a photo or a piece of layered art, press one button, and it works out what is near and what is far. Tune the motion, watch it loop live, export an MP4 or GIF.
 
 No account, no API key, nothing uploaded. The depth and pose models download once and then run on your own hardware.
+
+![The Parallax Studio window](docs/assets/parallax-studio-ui.png)
 
 ---
 
