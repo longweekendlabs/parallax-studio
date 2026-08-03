@@ -94,6 +94,14 @@ def rgba_to_qimage(array: np.ndarray) -> QImage:
     return image.copy().convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
 
 
+# How far the zoom term scales the frame at full slider. It displaces by
+# distance from centre, so it is zero on the middle of the picture and largest
+# at the edges -- which is exactly where the subject usually is not. At the old
+# 0.06 the whole control moved 5 of 255 grey levels between its extremes, which
+# is why it read as doing nothing. 0.18 doubles that and still leaves the
+# sampling grid clean with margin.
+ZOOM_TRAVEL = 0.18
+
 # The motion controls were calibrated when depth came from the brightness
 # heuristic, whose maps sit in a narrow band: measured std 0.068. A real depth
 # model spans far more of the range -- 0.233 on the same picture -- so the same
@@ -146,13 +154,13 @@ def motion_offset(
         eased = ramp * ramp * (3.0 - 2.0 * ramp)
         travel = eased * 2.0 - 1.0
         cross = math.sin(angle) * 0.35
-        zoom = travel * 0.06 * zoom_strength
+        zoom = travel * ZOOM_TRAVEL * zoom_strength
         return travel * amplitude * scale_x, cross * amplitude * scale_y, zoom
 
     return (
         math.sin(angle) * amplitude * scale_x,
         math.cos(angle) * amplitude * scale_y,
-        math.sin(angle) * 0.06 * zoom_strength,
+        math.sin(angle) * ZOOM_TRAVEL * zoom_strength,
     )
 
 

@@ -375,9 +375,10 @@ def _suggest_motion(
         "focus_depth": max(0.05, min(0.95, focus)),
         "motion_scale_x": 1.0,
         "motion_scale_y": float(min(0.75, max(0.12, aspect * 0.55))),
-        # Zoom travels along the same axis as the part separation and muddies
-        # it, so it is held back most where the figure is largest.
-        "zoom_strength": float(max(0.04, 0.28 - 0.24 * fill)),
+        # Eased back where the figure is largest, since zoom travels along the
+        # same axis as the part separation, but never so far that the control
+        # looks broken when the user goes to move it.
+        "zoom_strength": float(max(0.20, 0.45 - 0.25 * fill)),
         "layer_intensity": float(min(0.85, max(0.38, 0.85 - 0.45 * fill))),
         "duration": float(min(7.5, max(2.5, 2.6 + 4.2 * fill))),
     }
