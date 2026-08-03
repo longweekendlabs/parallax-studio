@@ -430,3 +430,22 @@ code {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.hero-shot figcaption {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.app-shot {
+  margin: 0 0 34px;
+}
+
+.app-shot img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: block;
+}

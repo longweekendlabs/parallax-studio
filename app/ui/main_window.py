@@ -410,8 +410,11 @@ class MainWindow(QMainWindow):
         body.addWidget(self.controls)
 
         root.addLayout(body, stretch=1)
+        # The transport bar was built, hidden, and then never added to a
+        # layout, so it has never appeared in the running app -- along with the
+        # preview frame-rate selector that lives on it.
         self.timeline = TimelineStrip()
-        self.timeline.hide()
+        root.addWidget(self.timeline)
 
         status_bar = QStatusBar()
         status_bar.setFixedHeight(24)
