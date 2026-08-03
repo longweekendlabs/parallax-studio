@@ -126,7 +126,16 @@ jobs:
           Compress-Archive -Path "dist/parallax-studio/*" `
             -DestinationPath "release/parallax-studio-v$version-windows-x64-portable.zip" -Force
           # Per-user install, so it never asks for administrator rights.
-          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" /DVERSION=$version packaging/windows/installer.nsi
+          # Braces around the variable name are required: $env:ProgramFiles(x86)
+          # parses as $env:ProgramFiles followed by (x86) and loses the space.
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { $nsis = "${env:ProgramFiles}\NSIS\makensis.exe" }
+          if (-not (Test-Path $nsis)) {
+            choco install nsis -y --no-progress
+            $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          if (-not (Test-Path $nsis)) { throw "NSIS not found at $nsis" }
+          & $nsis /DVERSION=$version packaging\windows\installer.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
 
       - uses: actions/upload-artifact@v4
