@@ -244,6 +244,17 @@ def pose_people(rgb: np.ndarray, pose_id: str) -> list[dict[str, Keypoint]]:
     return people
 
 
+def _smoothstep(value: np.ndarray, low: float, high: float) -> np.ndarray:
+    """0 at or below ``low``, 1 at or above ``high``, smooth in between.
+
+    Reaches its limits exactly, which a Gaussian falloff never does. That is
+    the whole point here: "leave the background alone" has to mean untouched,
+    not nearly untouched.
+    """
+    t = np.clip((value - low) / max(high - low, 1e-6), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 def _midpoint(a: Keypoint, b: Keypoint, t: float = 0.5) -> Keypoint:
     return Keypoint(
         a.x + (b.x - a.x) * t,
@@ -441,7 +452,16 @@ def body_part_depth(
         if head:
             hx = sum(pt.x for pt in head) / len(head)
             hy = sum(pt.y for pt in head) / len(head)
-            heads.append((hx * scale, hy * scale, span * scale * 0.16))
+            # Sized from the landmarks themselves rather than a fraction of the
+            # figure: those points sit around eye level and span roughly the
+            # width of the face, so the whole head including jaw and hair is
+            # about 2.6x their spread. The floor covers a profile shot, where
+            # only one or two of them are found and the spread collapses.
+            reach = max(
+                (max(abs(pt.x - hx), abs(pt.y - hy)) for pt in head), default=0.0
+            )
+            radius = max(reach * 2.6, span * 0.13)
+            heads.append((hx * scale, hy * scale, radius * scale))
 
     if not all_bones:
         raise BodyReliefUnavailable(
@@ -452,17 +472,19 @@ def body_part_depth(
 
     field, coverage = _relief_field(all_bones, small_shape, span * scale)
 
-    # Hold the relief off the face. A displaced face pulls its features apart
-    # and it is the first thing anyone looks at, so the head keeps the depth
-    # the model gave it and travels with the body instead.
-    for hx, hy, radius in heads:
+    # Hold the relief off every head. A displaced face pulls its features
+    # apart and it is the first thing anyone looks at.
+    #
+    # Smoothstep on distance, not a Gaussian. A Gaussian never actually
+    # reaches zero, so however steep it was made the head kept taking a share:
+    # measured at 11.8% of face pixels still moving. This is exactly zero
+    # inside the head and exactly one outside it, with a smooth ramp between,
+    # so no step is introduced for the feather to have to fix.
+    if heads:
         yy, xx = np.mgrid[0:small_shape[0], 0:small_shape[1]].astype(np.float32)
-        # Fourth power, not squared: a plain Gaussian only reaches zero at the
-        # exact centre, so the jaw and neck still took part of the relief. This
-        # has a flat floor over the whole head and climbs quickly outside it.
-        norm = ((xx - hx) ** 2 + (yy - hy) ** 2) / (radius * radius)
-        keep = 1.0 - np.exp(-(norm * norm) / 2.0)
-        coverage = coverage * keep
+        for hx, hy, radius in heads:
+            distance = np.sqrt((xx - hx) ** 2 + (yy - hy) ** 2) / max(radius, 1e-6)
+            coverage = coverage * _smoothstep(distance, 1.0, 1.8)
 
     if scale < 1.0:
         field = cv2.resize(field, (width, height), interpolation=cv2.INTER_LINEAR)
@@ -481,10 +503,14 @@ def body_part_depth(
 
     # Only where the pose actually reaches. Elsewhere -- background, and any
     # figure the pose model did not find -- the depth model's map stands.
-    # Squared, so the segmentation's soft halo outside the figure falls away
-    # fast and the relief stops at the body rather than leaking onto what is
-    # behind it.
-    apply = (mask * mask) * coverage
+    # Exactly zero off the subject. Squaring the mask only made the halo
+    # outside the figure small, not absent -- 7% of background pixels were
+    # still moving. Smoothstep gives a hard zero below 0.55 and a hard one
+    # above 0.85, which puts the whole transition inside the silhouette: every
+    # pixel the segmentation does not call subject keeps the depth model's
+    # value untouched, bit for bit, and nothing beyond the body is ever
+    # displaced differently from before.
+    apply = _smoothstep(mask, 0.55, 0.85) * coverage
 
     # Fit the rebuilt figure into the room available around its own depth,
     # rather than renormalising the finished map. A global renormalise was
@@ -512,6 +538,11 @@ def body_part_depth(
         f"{len(all_bones)} body parts, {figure_frac * 100:.0f}% of frame"
     )
     result = np.clip(blended, 0.0, 1.0).astype(np.float32)
+    # The gate goes back to the caller so the finished maps can be composited
+    # through it. Everything downstream of here -- the feather in particular --
+    # blurs across the silhouette, which would carry the figure's new values
+    # out into the background however cleanly they were masked here.
+    body_part_depth.last_gate = apply.astype(np.float32)
     body_part_depth.suggested_motion = _suggest_motion(
         result, solid, people, span / max(height, width)
     )

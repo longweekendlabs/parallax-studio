@@ -382,11 +382,18 @@ def estimate_depth(
         # session helpers.
         from app.core import body_model
 
-        # Feathered against the rebuilt map, not the model's own: measured,
-        # taking edges only from the original leaves the part structure's own
-        # gradients unfeathered and the sampling grid folds again (-5.2).
-        depth = body_model.body_part_depth(
+        rebuilt = body_model.body_part_depth(
             image, depth, relief_strength,
             pose_id or body_model.DEFAULT_POSE,
         )
+        gate = body_model.body_part_depth.last_gate
+        # Both maps are feathered, then composited through the subject gate.
+        # Feathering the combined map instead let the blur carry the figure's
+        # values across its own outline: measured, background pixels moved by
+        # up to 0.26 on a map that had masked them out perfectly. Done this
+        # way, every pixel the gate calls background is bit-for-bit the Auto
+        # Depth result, and so is every pixel on a head.
+        plain = soften_for_parallax(depth)
+        shaped = soften_for_parallax(rebuilt)
+        return (plain * (1.0 - gate) + shaped * gate).astype(np.float32)
     return soften_for_parallax(depth)
