@@ -347,3 +347,86 @@ code {
     width: 100%;
   }
 }
+
+/* Download section: one card per platform, so a visitor can see at a glance
+   which packages exist for their system instead of reading a flat list of
+   filenames. */
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.platform-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  transition: border-color 160ms ease;
+}
+
+.platform-card:hover {
+  border-color: rgba(61, 217, 201, 0.45);
+}
+
+.platform-icon {
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(61, 217, 201, 0.32);
+  border-radius: 14px;
+  background: rgba(61, 217, 201, 0.1);
+  color: #aef7ef;
+  font-weight: 900;
+  font-size: 0.85rem;
+}
+
+.platform-card strong {
+  font-size: 1.1rem;
+}
+
+.platform-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 0.94rem;
+}
+
+.platform-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.platform-links .button {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.platform-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-style: italic;
+}
+
+.download-foot {
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .platform-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
