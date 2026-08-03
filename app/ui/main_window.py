@@ -62,8 +62,8 @@ from app.ui.theme import (
     C_WINDOW_BG,
 )
 from app.ui.export_dialog import ExportDialog
-from app.ui.timeline import TimelineStrip
-from app.version import __app_name__, __version__
+from app.ui.timeline import FpsSelector, TimelineStrip
+from app.version import __app_name__, __org_name__, __version__
 from app.utils.paths import ensure_app_dirs
 from app.utils.file_dialogs import open_images, open_project_or_image, save_project
 from app.utils.settings import AppSettings, load_settings, save_settings
@@ -117,7 +117,20 @@ class BrandWidget(QWidget):
         return QSize(width, 42)
 
     def minimumSizeHint(self):
-        return self.sizeHint()
+        # Only the name and version are essential. The byline is dropped when
+        # the bar is tight rather than letting the whole line be chopped
+        # mid-word, which is what it did at the default window width: 143px of
+        # the 354 it wanted.
+        title_font = QFont("Inter", 17)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        version_font = QFont("Inter", 9)
+        version_font.setWeight(QFont.Weight.Medium)
+        width = int(
+            QFontMetricsF(title_font).horizontalAdvance(__app_name__)
+            + 10
+            + QFontMetricsF(version_font).horizontalAdvance(f"v{__version__}")
+        )
+        return QSize(width, 42)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -134,16 +147,22 @@ class BrandWidget(QWidget):
 
         baseline_y = 26
         title_x = 0
-        brand_x = title_metrics.horizontalAdvance(__app_name__) + 16
+        title_width = title_metrics.horizontalAdvance(__app_name__)
 
         p.setFont(title_font)
         p.setPen(QColor(C_TEXT_MAIN))
         p.drawText(QPointF(title_x, baseline_y), __app_name__)
 
+        # Byline first if it fits, version alone if it does not.
+        full = f"by {__org_name__}  v{__version__}"
+        short = f"v{__version__}"
+        available = self.width() - title_width - 16
+        suffix = full if brand_metrics.horizontalAdvance(full) <= available else short
+
         p.setFont(brand_font)
         p.setPen(QColor(145, 161, 173, 165))
         brand_y = baseline_y - (title_metrics.ascent() - brand_metrics.ascent()) * 0.22
-        p.drawText(QPointF(brand_x, brand_y), f"by Long Weekend Labs  v{__version__}")
+        p.drawText(QPointF(title_width + 16, brand_y), suffix)
         p.end()
 
 
@@ -255,6 +274,14 @@ class TopBar(QWidget):
         row.addWidget(self.redo_button)
         row.addWidget(self.reset_button)
         row.addStretch(2)
+        self.fps_selector = FpsSelector()
+        self.fps_selector.setToolTip(
+            "Preview playback rate. Matches the export frame rates so the preview "
+            "can be judged at the rate the file will be rendered at."
+        )
+        self.fps_selector.setFixedWidth(102)
+        row.addWidget(self.fps_selector)
+        row.addSpacing(6)
         self.preview_button = PreviewButton()
         row.addWidget(self.preview_button)
         row.addSpacing(8)
@@ -410,11 +437,13 @@ class MainWindow(QMainWindow):
         body.addWidget(self.controls)
 
         root.addLayout(body, stretch=1)
-        # The transport bar was built, hidden, and then never added to a
-        # layout, so it has never appeared in the running app -- along with the
-        # preview frame-rate selector that lives on it.
+        # Deliberately not in the layout. The transport bar is kept as an
+        # object so the time and ready-state calls dotted around still have
+        # something to talk to, but it is not shown: nobody asked for a video
+        # timeline in this app. The frame-rate selector that used to live on it
+        # is in the top bar instead.
         self.timeline = TimelineStrip()
-        root.addWidget(self.timeline)
+        self.timeline.hide()
 
         status_bar = QStatusBar()
         status_bar.setFixedHeight(24)
@@ -441,7 +470,7 @@ class MainWindow(QMainWindow):
         self.canvas.layerTransformFinished.connect(self._finish_transform_edit)
         self.timeline.playRequested.connect(lambda: self._set_preview_playing(True))
         self.timeline.pauseRequested.connect(lambda: self._set_preview_playing(False))
-        self.timeline.fpsChanged.connect(self._set_preview_fps)
+        self.top_bar.fps_selector.changed.connect(self._set_preview_fps)
         self.layer_panel.addLayerRequested.connect(self._add_layers_from_picker)
         self.layer_panel.layerSelected.connect(self._select_layer)
         self.layer_panel.layerRemoveRequested.connect(self._remove_layer)
@@ -465,7 +494,7 @@ class MainWindow(QMainWindow):
             self.brush_settings.depth_value,
         )
         self.timeline.set_time(0.0, 0.0)
-        self.timeline.set_preview_fps(self.motion_settings.preview_fps)
+        self.top_bar.fps_selector.set_value(self.motion_settings.preview_fps, emit=False)
         self._sync_preview_readiness()
         self._start_preview_timer()
 
@@ -1128,7 +1157,7 @@ class MainWindow(QMainWindow):
         # move, so it has to carry the new rate or the next edit reverts it.
         self.controls.set_preview_fps(int(fps))
         self._frame_times.clear()
-        self.timeline.set_measured_fps(None)
+        self._report_measured_fps(None)
         self._start_preview_timer()
 
     def _record_frame_time(self):
@@ -1142,7 +1171,7 @@ class MainWindow(QMainWindow):
         span = self._frame_times[-1] - self._frame_times[0]
         if span <= 0:
             return
-        self.timeline.set_measured_fps((len(self._frame_times) - 1) / span)
+        self._report_measured_fps((len(self._frame_times) - 1) / span)
 
     def _apply_body_relief_motion(self, layer: Layer, motion: dict):
         """Set the motion controls to suit the depth Body Relief just wrote.
@@ -1162,6 +1191,22 @@ class MainWindow(QMainWindow):
         layer.duration = motion["duration"]
         self.controls.set_motion_settings(self.motion_settings)
         self._request_preview_refresh()
+
+    def _report_measured_fps(self, measured: float | None):
+        """Say so when the preview cannot keep up with the selected rate.
+
+        Goes to the status bar rather than a label, since the widget that used
+        to carry it is not on screen.
+        """
+        selector = self.top_bar.fps_selector
+        target = selector.value()
+        if measured is None or measured >= target * 0.85:
+            selector.setEnabled(True)
+            return
+        self.status_controller.info(
+            f"Preview is managing {measured:.0f} fps of {target}. The export still "
+            "renders every frame."
+        )
 
     def _preview_motion(self) -> MotionSettings:
         """The motion the preview is actually rendering.

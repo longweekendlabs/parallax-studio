@@ -146,7 +146,7 @@ class FpsSelector(QWidget):
         for rate in self.RATES:
             btn = QPushButton(str(rate))
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedSize(34, 24)
+            btn.setFixedSize(30, 26)
             btn.setToolTip(f"Play the preview at {rate} fps, matching a {rate} fps export")
             btn.clicked.connect(lambda _=False, r=rate: self.set_value(r))
             self._buttons[rate] = btn
