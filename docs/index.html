@@ -43,7 +43,7 @@
           <dl class="facts">
             <div>
               <dt>Runs on</dt>
-              <dd>Linux and macOS</dd>
+              <dd>Windows, Linux, macOS</dd>
             </div>
             <div>
               <dt>AI</dt>
@@ -131,19 +131,39 @@
       <section class="band band-alt" id="download">
         <div class="section-head">
           <p class="eyebrow">Download</p>
-          <h2>Linux and macOS builds.</h2>
+          <h2 id="release-title">Packages for every platform.</h2>
+          <p id="release-note">Fetching the latest release from GitHub...</p>
         </div>
-        <div class="download-panel">
-          <div>
-            <h3 id="release-title">Latest release</h3>
-            <p id="release-note">Fetching release details from GitHub...</p>
+        <div class="platform-grid" id="platform-grid">
+          <div class="platform-card" data-platform="windows">
+            <span class="platform-icon">Win</span>
+            <strong>Windows</strong>
+            <p class="platform-note">64-bit. The installer is per-user, so it does not ask for administrator rights.</p>
+            <div class="platform-links"></div>
           </div>
-          <div class="download-actions" id="download-actions">
-            <a class="button button-primary" href="https://github.com/longweekendlabs/parallax-studio/releases/latest">
-              View releases
-            </a>
+          <div class="platform-card" data-platform="linux">
+            <span class="platform-icon">Tux</span>
+            <strong>Linux</strong>
+            <p class="platform-note">x86_64. RPM for Fedora and RHEL, DEB for Debian and Ubuntu, or a portable tarball.</p>
+            <div class="platform-links"></div>
+          </div>
+          <div class="platform-card" data-platform="macos">
+            <span class="platform-icon">Mac</span>
+            <strong>macOS</strong>
+            <p class="platform-note">Apple Silicon, macOS 12 or newer.</p>
+            <div class="platform-links"></div>
+          </div>
+          <div class="platform-card" data-platform="source">
+            <span class="platform-icon">Src</span>
+            <strong>Source</strong>
+            <p class="platform-note">Run it with Python 3.11 to 3.13 on any of the three.</p>
+            <div class="platform-links"></div>
           </div>
         </div>
+        <p class="download-foot">
+          The depth and pose models are not bundled. They download on first use of Auto Depth or
+          Body Relief, about 70 MB in total, and are kept on your machine afterwards.
+        </p>
       </section>
 
       <section class="band more-section">
@@ -168,15 +188,29 @@
 
     <script>
       const REPO = "longweekendlabs/parallax-studio";
-      const releasesUrl = `https://github.com/${REPO}/releases/latest`;
 
-      function assetLabel(name) {
-        if (name.endsWith(".rpm")) return "Download RPM";
-        if (name.endsWith(".tar.gz")) return "Download tarball";
-        if (name.endsWith(".dmg")) return "Download DMG";
-        if (name.endsWith(".zip")) return "Download ZIP";
-        if (name.endsWith(".app")) return "Download app";
-        return "Download";
+      // Which card an asset belongs on, and how to describe it there. Order
+      // matters: the source archives are .zip and .tar.gz too, so they are
+      // matched on the word "source" before the platform rules get a look.
+      const RULES = [
+        { platform: "source",  test: (n) => n.includes("source") && n.endsWith(".zip"),    label: "Source .zip" },
+        { platform: "source",  test: (n) => n.includes("source") && n.endsWith(".tar.gz"), label: "Source .tar.gz" },
+        { platform: "windows", test: (n) => n.endsWith("setup.exe"),                       label: "Installer (.exe)", primary: true },
+        { platform: "windows", test: (n) => n.includes("windows") && n.endsWith(".zip"),   label: "Portable (.zip)" },
+        { platform: "linux",   test: (n) => n.endsWith(".rpm"),                            label: "RPM (Fedora, RHEL)", primary: true },
+        { platform: "linux",   test: (n) => n.endsWith(".deb"),                            label: "DEB (Debian, Ubuntu)", primary: true },
+        { platform: "linux",   test: (n) => n.endsWith(".tar.gz"),                         label: "Portable (.tar.gz)" },
+        { platform: "macos",   test: (n) => n.endsWith(".dmg"),                            label: "Disk image (.dmg)", primary: true },
+        { platform: "macos",   test: (n) => n.includes("macos") && n.endsWith(".zip"),     label: "App bundle (.zip)" },
+      ];
+
+      function classify(name) {
+        const lower = name.toLowerCase();
+        return RULES.find((rule) => rule.test(lower)) || null;
+      }
+
+      function megabytes(bytes) {
+        return `${Math.max(1, Math.round(bytes / 1048576))} MB`;
       }
 
       fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
@@ -185,37 +219,56 @@
           return response.json();
         })
         .then((release) => {
-          const badge = document.getElementById("version-badge");
-          const title = document.getElementById("release-title");
-          const note = document.getElementById("release-note");
-          const topButton = document.getElementById("download-button");
-          const actions = document.getElementById("download-actions");
           const assets = release.assets || [];
-          const primary = assets.find((asset) => asset.name.endsWith(".dmg")) || assets[0];
+          document.getElementById("version-badge").textContent = `Latest: ${release.tag_name}`;
+          document.getElementById("release-title").textContent =
+            `Packages for every platform. ${release.tag_name}`;
+          document.getElementById("release-note").textContent =
+            "Pick the package for your system. Every build comes from the same tagged source.";
 
-          badge.textContent = `Latest: ${release.tag_name}`;
-          title.textContent = `Latest release: ${release.tag_name}`;
-          note.textContent = release.name || "Download the newest Parallax Studio build from GitHub Releases.";
+          let firstPrimary = null;
+          assets.forEach((asset) => {
+            const rule = classify(asset.name);
+            if (!rule) return;
+            const card = document.querySelector(`[data-platform="${rule.platform}"]`);
+            if (!card) return;
+            const link = document.createElement("a");
+            link.className = rule.primary ? "button button-primary" : "button button-secondary";
+            link.href = asset.browser_download_url;
+            link.textContent = `${rule.label} \u00b7 ${megabytes(asset.size)}`;
+            card.querySelector(".platform-links").appendChild(link);
+            if (rule.primary && !firstPrimary) firstPrimary = asset;
+          });
 
-          if (primary) {
-            topButton.href = primary.browser_download_url;
-            topButton.textContent = assetLabel(primary.name);
-            actions.innerHTML = "";
-            assets.forEach((asset) => {
-              const mb = Math.max(1, Math.round(asset.size / 1048576));
-              const link = document.createElement("a");
-              link.className = "button button-secondary";
-              link.href = asset.browser_download_url;
-              link.textContent = `${assetLabel(asset.name)} · ${mb} MB`;
-              actions.appendChild(link);
-            });
+          // Any card the release has nothing for says so, rather than sitting
+          // there empty and looking broken.
+          document.querySelectorAll(".platform-card").forEach((card) => {
+            const links = card.querySelector(".platform-links");
+            if (links.children.length === 0) {
+              const note = document.createElement("p");
+              note.className = "platform-empty";
+              note.textContent = "Not in this release yet.";
+              links.appendChild(note);
+            }
+          });
+
+          const topButton = document.getElementById("download-button");
+          if (firstPrimary) {
+            topButton.href = firstPrimary.browser_download_url;
+            topButton.textContent = "Download latest";
           }
         })
         .catch(() => {
           document.getElementById("version-badge").textContent = "Release download coming soon";
           document.getElementById("release-title").textContent = "Build from source today";
           document.getElementById("release-note").textContent =
-            "A packaged release is not published yet. The source is available now; local builds come from build_rpm.sh on Linux and build_macos.sh on macOS.";
+            "A packaged release is not published yet. The source is available now; local builds come from build_rpm.sh on Linux, build_macos.sh on macOS.";
+          document.querySelectorAll(".platform-links").forEach((links) => {
+            const note = document.createElement("p");
+            note.className = "platform-empty";
+            note.textContent = "No published release yet.";
+            links.appendChild(note);
+          });
         });
     </script>
   </body>
