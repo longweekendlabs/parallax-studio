@@ -1,0 +1,192 @@
+name: Build and Release
+
+# Never runs on a push or a pull request. Only a version tag, or the Run
+# workflow button. Nothing here can start on its own.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, for example v0.9.8. Leave blank to build artifacts only."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: parallax-studio
+
+jobs:
+  source:
+    name: Source archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(python tools/print_version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Create source archives
+        shell: bash
+        run: |
+          mkdir -p release
+          git archive --format=zip \
+            --output="release/${APP_NAME}-v${{ steps.version.outputs.version }}-source.zip" HEAD
+          git archive --format=tar.gz \
+            --output="release/${APP_NAME}-v${{ steps.version.outputs.version }}-source.tar.gz" HEAD
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: release/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg rpm libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(python tools/print_version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Build application
+        # build_linux.sh makes its own virtualenv and installs requirements,
+        # exactly as it does on a developer machine.
+        shell: bash
+        run: bash ./build_linux.sh
+
+      - name: Package tarball, deb and rpm
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash ./packaging/linux/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Build application
+        shell: pwsh
+        run: python -m PyInstaller --clean --noconfirm parallax_studio_windows.spec
+
+      - name: Package portable zip and installer
+        shell: pwsh
+        run: |
+          $version = python tools/print_version.py
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path "dist/parallax-studio/*" `
+            -DestinationPath "release/parallax-studio-v$version-windows-x64-portable.zip" -Force
+          # Per-user install, so it never asks for administrator rights.
+          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" /DVERSION=$version packaging/windows/installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [source, linux, windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease || false }}
+        shell: bash
+        run: |
+          NOTES="Automated build for ${TAG_NAME}. Linux rpm, deb and tarball, Windows installer and portable zip, plus source archives."
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-assets/* --clobber
+          else
+            prerelease_flag=""
+            if [ "$PRERELEASE" = "true" ]; then
+              prerelease_flag="--prerelease"
+            fi
+            gh release create "$TAG_NAME" release-assets/* \
+              --title "$TAG_NAME" --notes "$NOTES" $prerelease_flag
+          fi
+
+      - name: Delete workflow artifacts
+        # Release assets are free and unaffected; the build artifacts are what
+        # eat the 500 MB storage allowance, and they are duplicates by now.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[].id' | while read -r id; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" || true
+          done
