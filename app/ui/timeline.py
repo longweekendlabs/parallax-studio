@@ -151,6 +151,16 @@ class FpsSelector(QWidget):
             btn.clicked.connect(lambda _=False, r=rate: self.set_value(r))
             self._buttons[rate] = btn
             row.addWidget(btn)
+
+        # Three bare numbers in a toolbar say nothing about what they do. The
+        # unit is what makes them read as a frame rate rather than, say, a
+        # zoom or a brush size.
+        unit = QLabel("fps")
+        unit.setStyleSheet(
+            f"color: {C_TEXT_MUTED}; font-size: 11px; background: transparent;"
+        )
+        row.addSpacing(2)
+        row.addWidget(unit)
         row.addStretch()
         self._sync()
 
