@@ -131,11 +131,11 @@ app = BUNDLE(
         else None
     ),
     bundle_identifier="com.longweekendlabs.parallaxstudio",
-    version="0.9.10",
+    version="0.9.11",
     info_plist={
         "CFBundleDisplayName": "Parallax Studio",
-        "CFBundleVersion": "0.9.10",
-        "CFBundleShortVersionString": "0.9.10",
+        "CFBundleVersion": "0.9.11",
+        "CFBundleShortVersionString": "0.9.11",
         "NSPrincipalClass": "NSApplication",
         "NSAppleScriptEnabled": False,
         "NSHighResolutionCapable": True,

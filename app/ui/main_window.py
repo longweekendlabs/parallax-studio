@@ -279,7 +279,7 @@ class TopBar(QWidget):
             "Preview playback rate. Matches the export frame rates so the preview "
             "can be judged at the rate the file will be rendered at."
         )
-        self.fps_selector.setFixedWidth(102)
+        self.fps_selector.setFixedWidth(128)
         row.addWidget(self.fps_selector)
         row.addSpacing(6)
         self.preview_button = PreviewButton()
