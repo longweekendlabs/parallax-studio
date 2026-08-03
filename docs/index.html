@@ -6,7 +6,7 @@
     <title>Parallax Studio</title>
     <meta
       name="description"
-      content="Parallax Studio turns layered artwork into looping 2.5D parallax animations on macOS Apple Silicon."
+      content="Parallax Studio turns a still image into a looping 2.5D parallax animation, with depth and pose models that run entirely on your own machine. Linux and macOS."
     />
     <meta name="theme-color" content="#091015" />
     <meta property="og:title" content="Parallax Studio" />
@@ -24,8 +24,9 @@
           <div class="eyebrow">Long Weekend Labs</div>
           <h1>Parallax Studio</h1>
           <p class="lede">
-            A local macOS tool for importing layered art, painting depth, and turning still images
-            into clean looping parallax motion.
+            Turn a still image into a looping 2.5D parallax animation. Paint depth by hand, or let
+            it generate depth for you. Every model runs on your own machine, with no accounts,
+            API keys or uploads.
           </p>
           <div class="version-badge" id="version-badge">Checking latest release...</div>
           <div class="actions">
@@ -41,12 +42,12 @@
           </div>
           <dl class="facts">
             <div>
-              <dt>Target</dt>
-              <dd>macOS Apple Silicon</dd>
+              <dt>Runs on</dt>
+              <dd>Linux and macOS</dd>
             </div>
             <div>
-              <dt>Workflow</dt>
-              <dd>Import, paint, preview, export</dd>
+              <dt>AI</dt>
+              <dd>Offline, nothing uploaded</dd>
             </div>
             <div>
               <dt>Project file</dt>
@@ -67,16 +68,16 @@
         </div>
         <div class="columns">
           <div>
-            <h3>Layer stack</h3>
-            <p>Import background, character, and foreground layers, then reorder, hide, duplicate, and scale them.</p>
+            <h3>Auto Depth</h3>
+            <p>Depth Anything V2 separates a subject from its background, then the map is feathered where it would otherwise tear: a hard outline does not stretch under displacement, it folds back over itself.</p>
+          </div>
+          <div>
+            <h3>Body Relief</h3>
+            <p>For photographs of people. Finds every figure and its pose, then rebuilds the depth inside each one so chest, waist, hips and legs each carry their own parallax instead of the figure sliding as one cutout.</p>
           </div>
           <div>
             <h3>Depth paint</h3>
-            <p>Brush depth directly onto the selected layer with readable overlays and undo/redo for edits and transforms.</p>
-          </div>
-          <div>
-            <h3>Motion preview</h3>
-            <p>See live parallax movement while tuning intensity, focus, and loop behavior before export.</p>
+            <p>Or do it yourself. Brush size, hardness, strength and depth value over a colour-ramped overlay that actually shows what you have painted, with undo and redo.</p>
           </div>
         </div>
       </section>
@@ -96,8 +97,8 @@
             <p>Export GIF or MP4 loops for previews, social posts, trailers, or in-game presentation.</p>
           </div>
           <div>
-            <h3>Local-first workflow</h3>
-            <p>No cloud dependency. The app stays on your Mac and references source image files directly.</p>
+            <h3>Offline by design</h3>
+            <p>The depth, segmentation and pose models download once and then stay on your machine. No cloud service ever sees your pictures.</p>
           </div>
         </div>
       </section>
@@ -105,7 +106,7 @@
       <section class="band">
         <div class="section-head">
           <p class="eyebrow">Stack</p>
-          <h2>Python and Qt, tuned for Apple Silicon.</h2>
+          <h2>Python and Qt, with the models running locally.</h2>
         </div>
         <div class="columns small">
           <div>
@@ -117,8 +118,12 @@
             <p>NumPy and OpenCV</p>
           </div>
           <div>
+            <h3>AI</h3>
+            <p>ONNX Runtime, Apache-2.0 models</p>
+          </div>
+          <div>
             <h3>Export</h3>
-            <p>imageio, ffmpeg, and Pillow</p>
+            <p>imageio and ffmpeg, optional NVENC</p>
           </div>
         </div>
       </section>
@@ -126,7 +131,7 @@
       <section class="band band-alt" id="download">
         <div class="section-head">
           <p class="eyebrow">Download</p>
-          <h2>Get the latest local build.</h2>
+          <h2>Linux and macOS builds.</h2>
         </div>
         <div class="download-panel">
           <div>
@@ -166,6 +171,8 @@
       const releasesUrl = `https://github.com/${REPO}/releases/latest`;
 
       function assetLabel(name) {
+        if (name.endsWith(".rpm")) return "Download RPM";
+        if (name.endsWith(".tar.gz")) return "Download tarball";
         if (name.endsWith(".dmg")) return "Download DMG";
         if (name.endsWith(".zip")) return "Download ZIP";
         if (name.endsWith(".app")) return "Download app";
@@ -208,7 +215,7 @@
           document.getElementById("version-badge").textContent = "Release download coming soon";
           document.getElementById("release-title").textContent = "Build from source today";
           document.getElementById("release-note").textContent =
-            "A packaged release is not published yet. The source is available now, and local macOS builds are produced with build_macos.sh.";
+            "A packaged release is not published yet. The source is available now; local builds come from build_rpm.sh on Linux and build_macos.sh on macOS.";
         });
     </script>
   </body>
