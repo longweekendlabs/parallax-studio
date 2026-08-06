@@ -111,8 +111,16 @@ ZOOM_TRAVEL = 0.18
 # Amplitude is therefore divided by how much depth range the map actually uses,
 # so a slider position means the same amount of movement whether the depth was
 # painted by hand, guessed by the heuristic, or estimated by the model.
+#
+# The gain only ever reduces. A hand-painted map is flat 0.5 nearly everywhere
+# by design, since the whole point is to move one part of the photo and leave
+# the rest alone, so its standard deviation is tiny and the old 2.5x ceiling
+# was reached by every painted map there is. That multiplied the amplitude past
+# the point where the sampling grid folds, which is what tore the edges of a
+# brushed area. Capping at 1.0 also makes the amplitude the fold-safety feather
+# assumes (long edge x 0.06) the amplitude actually used.
 REFERENCE_SPREAD = 0.18
-_GAIN_LIMITS = (0.35, 2.5)
+_GAIN_LIMITS = (0.35, 1.0)
 
 
 def depth_gain(depth: np.ndarray | None) -> float:

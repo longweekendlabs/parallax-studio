@@ -188,6 +188,13 @@ class FpsSelector(QWidget):
                     color: {"#08131A" if active else C_TEXT_SECONDARY};
                     font-size: 12px;
                     font-weight: {700 if active else 500};
+                    /* The application sheet gives every QPushButton 14px of
+                       side padding. These are 30px wide and fixed, so that
+                       padding claimed 28 of the 30 and left two pixels for the
+                       number, which Qt then elided away to nothing. The buttons
+                       rendered as three blank boxes. */
+                    padding: 0px;
+                    text-align: center;
                 }}
                 QPushButton:hover {{
                     border-color: {C_ACCENT};

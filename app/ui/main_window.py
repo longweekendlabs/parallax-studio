@@ -36,9 +36,11 @@ from app.core.depth import (
     paint_depth,
     push_depth_undo,
     redo_depth,
+    relax_paint_folds,
+    touch_depth,
     undo_depth,
 )
-from app.core import depth_model
+from app.core import body_model, depth_model
 from app.core.layer import Layer, is_supported_image, load_layer
 from app.core.project import ProjectSerializer
 from app.ui.canvas import CanvasPanel
@@ -47,6 +49,7 @@ from app.ui.controls import BrushSettings, ControlsPanel, MotionSettings
 from app.ui.help_dialog import QuickHelpDialog
 from app.ui.layer_panel import LayerPanel
 from app.ui.depth_model_dialog import DepthModelDialog
+from app.ui.model_panel import missing_models
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.shortcuts_dialog import ShortcutsDialog
 from app.ui.theme import (
@@ -243,6 +246,7 @@ class TopBar(QWidget):
     helpRequested = Signal()
     shortcutsRequested = Signal()
     settingsRequested = Signal()
+    modelsRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -315,6 +319,7 @@ class TopBar(QWidget):
     def _show_more_menu(self):
         menu = QMenu(self)
         menu.addAction("Settings...", self.settingsRequested.emit)
+        menu.addAction("Models...", self.modelsRequested.emit)
         menu.addSeparator()
         menu.addAction("Quick Help", self.helpRequested.emit)
         menu.addAction("Keyboard Shortcuts", self.shortcutsRequested.emit)
@@ -348,6 +353,8 @@ class MainWindow(QMainWindow):
         self._frame_times: deque[float] = deque()
         self._overlay_dirty = True
         self._proxy_cache = {}
+        self._amplitude_key: tuple | None = None
+        self._amplitude_value: float = 1.0
         self._preview_user_paused = False
         self._last_preview_ready = False
         self._preview_paused_for_paint = False
@@ -486,13 +493,7 @@ class MainWindow(QMainWindow):
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
         self.controls.autoDepthRequested.connect(lambda: self._auto_depth_selected(False))
         self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
-        self.canvas.set_brush_preview(
-            self.brush_settings.size,
-            self.brush_settings.opacity,
-            self.brush_settings.erase,
-            self.brush_settings.hardness,
-            self.brush_settings.depth_value,
-        )
+        self._push_brush_preview()
         self.timeline.set_time(0.0, 0.0)
         self.top_bar.fps_selector.set_value(self.motion_settings.preview_fps, emit=False)
         self._sync_preview_readiness()
@@ -583,6 +584,7 @@ class MainWindow(QMainWindow):
         self.top_bar.helpRequested.connect(self._show_help_dialog)
         self.top_bar.shortcutsRequested.connect(self._show_shortcuts_dialog)
         self.top_bar.settingsRequested.connect(self._show_settings_dialog)
+        self.top_bar.modelsRequested.connect(self._show_models_dialog)
         self.addActions([
             self.new_action,
             self.open_action,
@@ -613,13 +615,17 @@ class MainWindow(QMainWindow):
     def _show_shortcuts_dialog(self):
         ShortcutsDialog(self).exec()
 
-    def _show_settings_dialog(self):
-        dialog = SettingsDialog(self.settings, self)
+    def _show_settings_dialog(self, page: str = "depth"):
+        dialog = SettingsDialog(self.settings, self, page=page)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.settings = dialog.result_settings()
         save_settings(self.settings)
         self.status_controller.info("Settings saved")
+
+    def _show_models_dialog(self):
+        # Models are a Settings page now, not a window of their own.
+        self._show_settings_dialog("models")
 
     def _show_status(self, message: StatusMessage):
         prefix = {
@@ -841,6 +847,9 @@ class MainWindow(QMainWindow):
         selected_layer = self._selected_layer()
         if selected_layer is not None:
             self.controls.set_selected_layer_motion(selected_layer, selected_layer.locked)
+            # The ring is measured against the composite, and both the brush
+            # size and the preview scale depend on which image is loaded.
+            self._push_brush_preview()
         selected_visible = selected_layer is not None and selected_layer.visible
         if selected_visible:
             ensure_depth_map(selected_layer)
@@ -942,8 +951,9 @@ class MainWindow(QMainWindow):
             "y_offset": layer.y_offset,
             "scale": layer.scale,
             "depth_map": None if layer.depth_map is None else layer.depth_map.copy(),
-            "depth_undo_stack": [depth.copy() for depth in layer.depth_undo_stack],
-            "depth_redo_stack": [depth.copy() for depth in layer.depth_redo_stack],
+            "depth_inverted": layer.depth_inverted,
+            "depth_undo_stack": [(depth.copy(), flipped) for depth, flipped in layer.depth_undo_stack],
+            "depth_redo_stack": [(depth.copy(), flipped) for depth, flipped in layer.depth_redo_stack],
         }
 
     def _project_snapshot(self) -> tuple[list[dict], str | None]:
@@ -971,9 +981,10 @@ class MainWindow(QMainWindow):
                 y_offset=data["y_offset"],
                 scale=data["scale"],
                 depth_map=None if data["depth_map"] is None else data["depth_map"].copy(),
+                depth_inverted=data.get("depth_inverted", False),
             )
-            layer.depth_undo_stack = [depth.copy() for depth in data["depth_undo_stack"]]
-            layer.depth_redo_stack = [depth.copy() for depth in data["depth_redo_stack"]]
+            layer.depth_undo_stack = [(depth.copy(), flipped) for depth, flipped in data["depth_undo_stack"]]
+            layer.depth_redo_stack = [(depth.copy(), flipped) for depth, flipped in data["depth_redo_stack"]]
             restored.append(layer)
         self.layers = restored
         self.selected_layer_id = selected_id if selected_id in {layer.id for layer in restored} else (restored[-1].id if restored else None)
@@ -1113,8 +1124,18 @@ class MainWindow(QMainWindow):
 
     def _set_brush_settings(self, settings: BrushSettings):
         self.brush_settings = settings
+        self._push_brush_preview()
+
+    def _push_brush_preview(self):
+        """Send the brush ring to the canvas in the units the canvas draws in.
+
+        BrushSettings.size is in source pixels, because that is what the stroke
+        is stamped at, but the canvas measures against the composite, which is a
+        downscaled preview for anything larger than PREVIEW_MAX_DIM.
+        """
+        settings = self.brush_settings
         self.canvas.set_brush_preview(
-            settings.size,
+            max(1, int(round(settings.size * self._preview_scale()))),
             settings.opacity,
             settings.erase,
             settings.hardness,
@@ -1140,6 +1161,21 @@ class MainWindow(QMainWindow):
         if fps_changed:
             self._start_preview_timer()
         self._request_preview_refresh()
+
+    def _cached_amplitude(self, layer: Layer, width: int, height: int) -> float:
+        """motion_amplitude, remembered until the depth map changes.
+
+        The amplitude is normalised by the depth map's standard deviation, and
+        computing that over a 12MP map costs 25ms. It was being recomputed on
+        every preview frame to produce a single number that only moves when the
+        depth does, which put the floor on a preview frame at 41ms: a hard
+        ceiling of 24fps, and the reason picking 30 or 60 changed nothing at all.
+        """
+        key = (layer.id, layer.depth_revision, width, height)
+        if self._amplitude_key != key:
+            self._amplitude_key = key
+            self._amplitude_value = motion_amplitude(width, height, ensure_depth_map(layer))
+        return self._amplitude_value
 
     def _start_preview_timer(self):
         interval = max(1, int(1000 / max(1, self.motion_settings.preview_fps)))
@@ -1275,7 +1311,12 @@ class MainWindow(QMainWindow):
         visible_layers = [l for l in self.layers if l.visible and not l.image.isNull()]
         orig_w = max((l.image.width() for l in visible_layers), default=800)
         orig_h = max((l.image.height() for l in visible_layers), default=600)
-        amplitude = motion_amplitude(orig_w, orig_h, ensure_depth_map(sel))
+        # Amplitude is a distance in pixels, so it has to be expressed in the
+        # pixels being rendered. The preview renders downscaled proxies; feeding
+        # them the source-resolution amplitude moved the preview by 0.47 of the
+        # frame width where the export moved by 0.15, which is the preview and
+        # the export disagreeing about how strong the motion is.
+        amplitude = self._cached_amplitude(sel, orig_w, orig_h) * self._preview_scale()
 
         frame = composite_animated_layers(
             self._preview_layers(),
@@ -1311,27 +1352,47 @@ class MainWindow(QMainWindow):
         return self.PREVIEW_MAX_DIM / float(longest)
 
     def _preview_layers(self) -> list[Layer]:
-        """Downscaled copies of the layers, cached until the source changes."""
+        """Downscaled stand-ins for the layers, sharing their live settings.
+
+        Only the two expensive pieces are cached: the scaled pixels and the
+        scaled depth map. The proxy Layer itself is rebuilt on every call so it
+        always carries the current motion settings. Caching the whole proxy is
+        what made the motion controls look dead on any photo large enough to be
+        downscaled: the sliders wrote to the real layer while the preview kept
+        rendering a snapshot taken when the proxy was first built.
+        """
         scale = self._preview_scale()
         if scale >= 1.0:
             return self.layers
+        cache: dict = {}
         proxies = []
         for layer in self.layers:
-            key = (layer.id, layer.image.cacheKey(), scale)
-            cached = self._proxy_cache.get(key)
             depth = ensure_depth_map(layer)
-            if cached is None or cached[1] is not depth:
-                w = max(1, int(layer.image.width() * scale))
-                h = max(1, int(layer.image.height() * scale))
+            w = max(1, int(layer.image.width() * scale))
+            h = max(1, int(layer.image.height() * scale))
+
+            # Pixels and depth are cached under separate keys. Scaling 12MP of
+            # artwork is the expensive half and the artwork does not change
+            # while painting, so a stroke only pays to rescale the depth map.
+            image_key = ("img", layer.id, layer.image.cacheKey(), scale)
+            small = self._proxy_cache.get(image_key)
+            if small is None:
                 small = layer.image.scaled(
                     w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
+            cache[image_key] = small
+
+            # depth_revision covers brush strokes, which write into the existing
+            # array and so cannot be spotted by comparing identity.
+            depth_key = ("depth", layer.id, scale, layer.depth_revision)
+            small_depth = self._proxy_cache.get(depth_key)
+            if small_depth is None:
                 small_depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_AREA)
-                proxy = _dc.replace(layer, image=small, depth_map=small_depth)
-                self._proxy_cache = {key: (proxy, depth)}
-                cached = (proxy, depth)
-            proxies.append(cached[0])
+            cache[depth_key] = small_depth
+
+            proxies.append(_dc.replace(layer, image=small, depth_map=small_depth))
+        self._proxy_cache = cache
         return proxies
 
     def _composite_layer_offset(self, composite: QImage | None, layer: Layer) -> tuple[int, int] | None:
@@ -1350,13 +1411,23 @@ class MainWindow(QMainWindow):
     def _depth_overlay_for_selected(self, composite: QImage | None, layer: Layer | None) -> QImage | None:
         if composite is None or layer is None or not layer.visible:
             return None
-        depth_image = depth_to_qimage(ensure_depth_map(layer))
+        depth = ensure_depth_map(layer)
+        # The overlay is drawn into the composite, which is a downscaled preview
+        # for anything past PREVIEW_MAX_DIM, so the depth map has to be measured
+        # in the same space. Drawing it at source resolution pinned the top left
+        # corner of the map over the picture at 1:1 and cropped away the rest,
+        # which meant a stroke anywhere but the top left left the overlay looking
+        # completely unchanged. Resizing the float map before colouring it is
+        # also several times cheaper than scaling the coloured image, and this
+        # runs on every overlay refresh while a stroke is in progress.
+        scale = layer.scale * self._preview_scale()
+        if abs(scale - 1.0) > 1e-3:
+            target_w = max(1, int(depth.shape[1] * scale))
+            target_h = max(1, int(depth.shape[0] * scale))
+            depth = cv2.resize(depth, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        depth_image = depth_to_qimage(depth)
         if depth_image is None:
             return None
-        if layer.scale != 1.0:
-            sw = max(1, int(depth_image.width() * layer.scale))
-            sh = max(1, int(depth_image.height() * layer.scale))
-            depth_image = depth_image.scaled(sw, sh, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
         offset = self._composite_layer_offset(composite, layer)
         if offset is None:
             return None
@@ -1437,7 +1508,15 @@ class MainWindow(QMainWindow):
 
     def _finish_depth_paint(self):
         self._last_paint_point = None
+        was_painting = self._depth_painting
         self._depth_painting = False
+        # Once, at the end of the stroke rather than per stamp: a brush edge the
+        # displacement cannot stretch gets feathered until it can. Without this,
+        # raising Hardness or Depth Value one notch above the defaults tears the
+        # edge of the area that was just painted.
+        layer = self._selected_layer()
+        if was_painting and layer is not None and relax_paint_folds(layer):
+            self._request_depth_overlay_refresh()
         if self._preview_paused_for_paint and self._motion_preview_ready():
             self._preview_paused_for_paint = False
             self._elapsed.restart()
@@ -1617,6 +1696,10 @@ class MainWindow(QMainWindow):
                 layer.image, model_id, self, relief=relief,
                 relief_strength=self.settings.body_relief_strength if relief else None,
                 pose_id=self.settings.pose_model if relief else None,
+                relief_weights=(
+                    body_model.ReliefWeights.from_settings(self.settings)
+                    if relief else None
+                ),
             )
             dialog.set_image(layer.image)
             dialog.start()
@@ -1631,6 +1714,8 @@ class MainWindow(QMainWindow):
                 return
             push_depth_undo(layer)
             layer.depth_map = dialog.depth_map
+            layer.depth_inverted = False
+            touch_depth(layer)
             if relief:
                 from app.core.body_model import body_part_depth
 

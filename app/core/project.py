@@ -65,6 +65,9 @@ class ProjectSerializer:
                 layer_data["depth_map"] = base64.b64encode(compressed).decode("ascii")
                 layer_data["depth_width"] = layer.depth_map.shape[1]
                 layer_data["depth_height"] = layer.depth_map.shape[0]
+                # Saved so the Invert button still reads the right way round
+                # after a reopen. The map itself is stored already flipped.
+                layer_data["depth_inverted"] = layer.depth_inverted
 
             data["layers"].append(layer_data)
 
@@ -129,6 +132,8 @@ class ProjectSerializer:
                     layer.depth_map = depth_map.reshape((h, w)).copy()
                 except Exception:
                     layer.depth_map = None
+                layer.depth_inverted = bool(l_data.get("depth_inverted", False))
+                layer.depth_revision += 1
 
             layers.append(layer)
 

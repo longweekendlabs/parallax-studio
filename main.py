@@ -1,9 +1,10 @@
+import logging
 import os
 import platform
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from app.version import __app_name__, __org_name__, __version__
 from app.ui.main_window import MainWindow
@@ -73,7 +74,27 @@ def main():
 
     window = MainWindow()
     window.show()
+
+    # Say up front what is missing, rather than ambushing the user with a
+    # download the first time they press a button. Only the models the two
+    # depth buttons actually need count here: the optional full-precision and
+    # Base checkpoints are alternatives, and nagging about them every launch
+    # would train the dialog to be dismissed unread.
+    QTimer.singleShot(0, lambda: _offer_model_setup(window))
+
     sys.exit(app.exec())
+
+
+def _offer_model_setup(window) -> None:
+    try:
+        from app.ui.model_panel import essential_missing
+        from app.ui.model_setup_dialog import ModelSetupDialog
+
+        if not essential_missing(window.settings):
+            return
+        ModelSetupDialog(window).exec()
+    except Exception:
+        logging.getLogger(__name__).exception("Model setup check failed")
 
 
 if __name__ == "__main__":

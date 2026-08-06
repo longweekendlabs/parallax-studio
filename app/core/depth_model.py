@@ -11,6 +11,7 @@ afterwards; nothing is bundled into the installer.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import urllib.error
 import urllib.request
@@ -129,16 +130,76 @@ def download_model(
     return ensure_file(get_model(model_id), progress_cb, cancelled_cb)
 
 
+def _extra_model_dirs() -> tuple[Path, ...]:
+    """Read-only places a model file may already be sitting.
+
+    Long Weekend Labs apps publish from the same upstream sources, so the same
+    file often exists twice on one machine. Swapio keeps its models beside its
+    own code and already downloads the face parser this app wants; Castivo does
+    the same with the InsightFace pack. Rather than pull another copy, look
+    where a sibling checkout would have put it. This only ever reads.
+    """
+    dirs: list[Path] = []
+
+    override = os.environ.get("PARALLAX_MODEL_DIRS", "").strip()
+    for entry in override.split(os.pathsep):
+        if entry.strip():
+            dirs.append(Path(entry.strip()).expanduser())
+
+    # A cache shared by every LWL app, for files that more than one of them use.
+    data_home = os.environ.get("XDG_DATA_HOME")
+    base = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    dirs.append(base / "long-weekend-labs" / "models")
+
+    # Running from a source checkout: the sibling projects live next door.
+    try:
+        projects = Path(__file__).resolve().parents[3]
+        if projects.is_dir():
+            dirs.extend(sorted(projects.glob("*/models")))
+    except (IndexError, OSError):
+        pass
+
+    seen: set[Path] = set()
+    unique = []
+    for path in dirs:
+        if path not in seen and path.is_dir():
+            seen.add(path)
+            unique.append(path)
+    return tuple(unique)
+
+
+def _complete(path: Path, model: DepthModel) -> bool:
+    # A partial file from an interrupted download would load as a corrupt model.
+    return path.is_file() and path.stat().st_size >= model.approx_bytes * 0.95
+
+
 def file_path(model: DepthModel) -> Path | None:
+    """Where this model is, preferring a copy that already exists.
+
+    Falls back to the app's own models directory, which is the only place a
+    download is ever written.
+    """
+    if not model.filename:
+        return None
+    target = models_dir() / model.filename
+    if _complete(target, model):
+        return target
+    for directory in _extra_model_dirs():
+        candidate = directory / model.filename
+        if _complete(candidate, model):
+            logger.info("Using %s already present at %s", model.filename, directory)
+            return candidate
+    return target
+
+
+def download_path(model: DepthModel) -> Path | None:
+    """Where a download would be written, ignoring any shared copy."""
     return models_dir() / model.filename if model.filename else None
 
 
 def has_file(model: DepthModel) -> bool:
     path = file_path(model)
-    if path is None or not path.is_file():
-        return False
-    # A partial file from an interrupted download would load as a corrupt model.
-    return path.stat().st_size >= model.approx_bytes * 0.95
+    return path is not None and _complete(path, model)
 
 
 def ensure_file(
@@ -147,11 +208,12 @@ def ensure_file(
     cancelled_cb: Callable[[], bool] | None = None,
 ) -> Path:
     """Download any cached model file. Shared with the body-part models."""
-    target = file_path(model)
+    if has_file(model):
+        # Already here, possibly in a shared location another app filled in.
+        return file_path(model)
+    target = download_path(model)
     if target is None:
         raise ValueError(f"{model.label} has no model file to download")
-    if has_file(model):
-        return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
     # Download beside the target so an interrupted transfer never looks complete.
@@ -339,6 +401,7 @@ def estimate_depth(
     image: QImage, model_id: str, relief: bool = False,
     relief_strength: float | None = None,
     pose_id: str | None = None,
+    relief_weights=None,
 ) -> np.ndarray:
     """Run the model and return a float32 depth map, 0 far to 1 near.
 
@@ -385,15 +448,34 @@ def estimate_depth(
         rebuilt = body_model.body_part_depth(
             image, depth, relief_strength,
             pose_id or body_model.DEFAULT_POSE,
+            weights=relief_weights,
         )
         gate = body_model.body_part_depth.last_gate
-        # Both maps are feathered, then composited through the subject gate.
-        # Feathering the combined map instead let the blur carry the figure's
-        # values across its own outline: measured, background pixels moved by
-        # up to 0.26 on a map that had masked them out perfectly. Done this
-        # way, every pixel the gate calls background is bit-for-bit the Auto
-        # Depth result, and so is every pixel on a head.
         plain = soften_for_parallax(depth)
         shaped = soften_for_parallax(rebuilt)
-        return (plain * (1.0 - gate) + shaped * gate).astype(np.float32)
+        result = (plain * (1.0 - gate) + shaped * gate).astype(np.float32)
+
+        # soften_for_parallax compresses the whole range toward the middle by
+        # PARALLAX_RANGE. Body Relief pulls every region it wants held still
+        # onto one plane and reports that plane as the focus depth, so the
+        # focus has to travel through the same compression or the two no longer
+        # agree: measured, a 0.20 compression of a centre at 0.88 left the face
+        # and the background sitting 0.076 off the focus plane and travelling
+        # 10px each, on the two regions that are supposed to be motionless.
+        motion = getattr(body_model.body_part_depth, "suggested_motion", None)
+        focus_c = 0.5
+        if motion and "focus_depth" in motion:
+            focus = float(motion["focus_depth"])
+            focus_c = max(0.05, min(0.95, 0.5 + (focus - 0.5) * PARALLAX_RANGE))
+            motion["focus_depth"] = focus_c
+
+        # Put the motionless regions back exactly on the focus plane. The
+        # feather above blurs across their outlines and pulls their edges off
+        # it, and an edge that moves is precisely what reads as the face
+        # wobbling or the background creeping. Both masks ramp outside the
+        # region they protect, so this adds no step inside it.
+        still = getattr(body_model.body_part_depth, "last_still", None)
+        if still is not None and still.shape == result.shape:
+            result = (result * (1.0 - still) + focus_c * still).astype(np.float32)
+        return result
     return soften_for_parallax(depth)
