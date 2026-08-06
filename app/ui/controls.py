@@ -56,10 +56,33 @@ def _set_tooltip_tree(widget: QWidget, text: str):
         child.setToolTip(text)
 
 
+# Brush size is a share of the image's long edge, not a fixed pixel count. A
+# fixed 220px ceiling is a broad brush on a 900px picture and a pinprick on a
+# 4000px photo, so the same slider position meant something different for every
+# image and the widest brush still could not cover a person in one pass. Tying
+# it to the picture also keeps the depth gradient a stroke leaves behind roughly
+# constant, and that gradient is what decides whether the moving edge tears.
+BRUSH_MIN_FRACTION = 0.01
+BRUSH_MAX_FRACTION = 0.25
+BRUSH_REFERENCE_DEFAULT = 1200
+
+
+def brush_pixels(slider_value: int, long_edge: int) -> int:
+    fraction = BRUSH_MIN_FRACTION + (
+        max(0, min(100, slider_value)) / 100.0
+    ) * (BRUSH_MAX_FRACTION - BRUSH_MIN_FRACTION)
+    return max(4, int(round(max(64, long_edge) * fraction)))
+
+
 @dataclass(frozen=True)
 class BrushSettings:
     size: int = 128
-    depth_value: float = 0.62
+    # Neutral is 0.50 and the background is meant to stay there, so the only
+    # thing that decides how far a brushed area travels is how far the stroke
+    # pushes away from neutral. At 0.62 a default stroke moved about 1% of the
+    # frame, which is not enough to read as a separate plane, which is why
+    # painting an area looked like it had done nothing at all.
+    depth_value: float = 0.75
     hardness: float = 0.18
     # Depthy defaults its brush to 0.25; 0.10 moved depth so little per pass
     # that strokes were invisible in the paint overlay.
@@ -441,6 +464,11 @@ class SimpleSliderRow(QWidget):
         self.value_label.setText(self.formatter(value))
         self.valueChanged.emit()
 
+    def refresh_label(self):
+        """Re-run the formatter without emitting; for formatters that depend on
+        something other than the slider position, such as the image size."""
+        self.value_label.setText(self.formatter(self.slider.value()))
+
 
 def _slider_row(label: str, value: int, display: str) -> QWidget:
     w = QWidget()
@@ -599,17 +627,24 @@ class ControlsPanel(QWidget):
         self._preview_fps = 24
 
         depth = Card("⌁", "DEPTH BRUSH")
-        self.brush_size = SimpleSliderRow("Brush Size", 58, lambda v: str(max(4, int(v * 2.2))))
-        self.depth_value = SimpleSliderRow("Depth Value", 62, lambda v: f"{v / 100:.2f}")
+        self._brush_reference = BRUSH_REFERENCE_DEFAULT
+        self.brush_size = SimpleSliderRow(
+            "Brush Size", 58, lambda v: f"{brush_pixels(v, self._brush_reference)} px"
+        )
+        self.depth_value = SimpleSliderRow("Depth Value", 75, lambda v: f"{v / 100:.2f}")
         self.hardness = SimpleSliderRow("Hardness", 18, lambda v: f"{v}%")
         self.opacity = SimpleSliderRow("Brush Strength", 100, lambda v: f"{v}%")
         _set_tooltip_tree(
             self.brush_size,
-            "Width of each depth stroke. Use smaller strokes around object edges; reserve large strokes for broad foreground or background areas."
+            "Width of each depth stroke, scaled to the image so the same setting covers the "
+            "same share of any picture. Use small strokes around object edges and large ones "
+            "for a whole figure or a background."
         )
         _set_tooltip_tree(
             self.depth_value,
-            "Depth painted by the brush. 0.50 is neutral, higher comes toward the viewer, lower moves away. The default is close to neutral so one stroke stays subtle."
+            "Depth painted by the brush. 0.50 is neutral and stays still; higher comes toward "
+            "the viewer, lower moves away. How far from 0.50 you paint is what decides how far "
+            "that area travels, so the default sits well clear of neutral."
         )
         _set_tooltip_tree(
             self.hardness,
@@ -657,12 +692,19 @@ class ControlsPanel(QWidget):
         )
         self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")
+        # Checkable purely so the button can show whether the map is currently
+        # flipped. Inverting is still one undoable edit per click; without the
+        # lit state there was nothing on screen saying which way round the
+        # depth was, so a second click looked like a different bug.
+        self.invert_depth_button.setCheckable(True)
         self.blur_depth_button = SmallAction("Soften")
         self.clear_depth_button.setToolTip(
             "Return the selected layer to flat 0.50 depth. Parallax motion will pause until the layer has depth variation again."
         )
         self.invert_depth_button.setToolTip(
-            "Swap near and far values on the selected layer. Use this when the foreground and background move backwards."
+            "Swap near and far on the selected layer, so whatever was moving stays put and "
+            "the rest moves instead. The button stays lit and reads Inverted while the map is "
+            "flipped. Click again to flip it back."
         )
         self.blur_depth_button.setToolTip(
             "Apply one undoable blur pass to the selected depth map. This is not an on/off toggle; repeated clicks keep softening."
@@ -775,9 +817,18 @@ class ControlsPanel(QWidget):
         self._emit_brush_settings()
         self._emit_motion_settings()
 
+    def set_brush_reference(self, long_edge: int):
+        """Tell the brush how big the image it is painting on is."""
+        long_edge = max(64, int(long_edge))
+        if long_edge == self._brush_reference:
+            return
+        self._brush_reference = long_edge
+        self.brush_size.refresh_label()
+        self._emit_brush_settings()
+
     def brush_settings(self) -> BrushSettings:
         return BrushSettings(
-            size=max(4, int(self.brush_size.value() * 2.2)),
+            size=brush_pixels(self.brush_size.value(), self._brush_reference),
             depth_value=self.depth_value.value() / 100,
             hardness=self.hardness.value() / 100,
             opacity=self.opacity.value() / 100,
@@ -829,7 +880,13 @@ class ControlsPanel(QWidget):
         MotionSettings, so the panel has to hold it across re-emits."""
         self._preview_fps = int(fps)
 
+    def set_depth_inverted(self, inverted: bool):
+        self.invert_depth_button.setChecked(bool(inverted))
+        self.invert_depth_button.setText("Inverted" if inverted else "Invert")
+
     def set_selected_layer_motion(self, layer, locked: bool = False):
+        self.set_depth_inverted(getattr(layer, "depth_inverted", False))
+        self.set_brush_reference(max(layer.image.width(), layer.image.height()))
         self.focus_depth.set_value(layer.focus_depth, emit=False)
         self.motion_path.set_value((layer.motion_scale_x, layer.motion_scale_y), emit=False)
         self.zoom_strength.setValue(max(0, min(100, int(round(layer.zoom_strength * 100)))), emit=False)

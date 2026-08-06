@@ -111,8 +111,13 @@ KEYPOINTS = (
     "left_knee", "right_knee", "left_ankle", "right_ankle",
 )
 MIN_CONFIDENCE = 0.3
-# Below this the pose is too incomplete to place parts from.
-MIN_KEYPOINTS = 8
+# Below this the pose is too incomplete to place parts from. Portrait crops,
+# which is most of what this gets pointed at, routinely return only the head
+# and shoulders: measured across a set of them, a figure filling 60% of the
+# frame was rejected on 7 of 17 joints. What actually matters is whether a
+# trunk can be built, and the "could not place its limbs" guard downstream
+# already checks exactly that, so this only has to exclude noise.
+MIN_KEYPOINTS = 5
 # A figure smaller than this is not worth rebuilding; the feather would eat it.
 MIN_PERSON_FRACTION = 0.01
 
@@ -152,10 +157,56 @@ PART_DEPTHS: dict[str, float] = {
 }
 
 
+# How far forward hair sits relative to the figure's own centre. Hair has no
+# joints, so there is nothing in the pose to place it from; it gets one value
+# of its own. It is high because hair against a face that is pinned still is
+# the clearest read of "this is bouncing" a still photo can give.
+HAIR_RELIEF = 0.85
+
+# How far the background setting stretches the scene's own depth around its
+# median at full strength. This deliberately amplifies what the depth model
+# already found rather than rebuilding anything: there are no joints out there
+# to place parts from, and flattening a room onto the figure's plane would be
+# the same "background drags along with the subject" fault from the other side.
+BACKGROUND_SPREAD = 0.60
+
+
 class Keypoint(NamedTuple):
     x: float
     y: float
     score: float
+
+
+@dataclass(frozen=True)
+class ReliefWeights:
+    """How much of the relief each region of the picture is allowed to take.
+
+    Which parts of a person should move is a taste decision, so it belongs to
+    the user rather than being decided here. Zero means a region keeps exactly
+    the depth the depth model gave it, so it moves with the scene and not
+    against it.
+    """
+
+    face: float = 0.0
+    hair: float = 0.85
+    body: float = 1.0
+    # Off by default. Body Relief is for moving a person, and a background that
+    # drifts along with them is the artefact this module was written to remove.
+    # Raising it deliberately is a different thing: it deepens the scene the
+    # figure is standing in, rather than dragging the scene with the figure.
+    background: float = 0.0
+
+    @classmethod
+    def from_settings(cls, settings) -> "ReliefWeights":
+        def read(name: str, default: float) -> float:
+            return max(0.0, min(1.0, float(getattr(settings, name, default))))
+
+        return cls(
+            face=read("relief_face", 0.0),
+            hair=read("relief_hair", 0.85),
+            body=read("relief_body", 1.0),
+            background=read("relief_background", 0.0),
+        )
 
 
 class BodyReliefUnavailable(RuntimeError):
@@ -167,7 +218,9 @@ def pose_spec(pose_id: str) -> PoseSpec:
 
 
 def required_models(pose_id: str) -> tuple[DepthModel, ...]:
-    return (SEGMENT_MODEL, pose_spec(pose_id).model)
+    from app.core.face_parser import FACE_PARSER
+
+    return (SEGMENT_MODEL, pose_spec(pose_id).model, FACE_PARSER)
 
 
 def models_ready(pose_id: str = DEFAULT_POSE) -> bool:
@@ -280,6 +333,39 @@ def _segments(kp: dict[str, Keypoint]) -> list[tuple[Keypoint, Keypoint, float, 
 
     shoulders = [kp[s] for s in ("left_shoulder", "right_shoulder") if s in kp]
     hips = [kp[s] for s in ("left_hip", "right_hip") if s in kp]
+
+    if shoulders and not hips:
+        # A portrait crop: the hips are simply not in the picture. This is the
+        # common case for the photographs this gets pointed at, and refusing it
+        # left the whole feature unavailable on them. Shoulder width is the one
+        # scale the pose still offers, and a torso runs roughly 1.6 of it, so
+        # the trunk is carried down that far along the head-to-shoulder axis.
+        # Using that axis rather than straight down keeps a leaning or reclining
+        # figure's trunk on the figure.
+        head = [kp[n] for n in ("nose", "left_eye", "right_eye") if n in kp]
+        shoulder_mid = shoulders[0] if len(shoulders) == 1 else _midpoint(*shoulders)
+        if len(shoulders) == 2:
+            width = max(
+                1.0,
+                ((shoulders[0].x - shoulders[1].x) ** 2
+                 + (shoulders[0].y - shoulders[1].y) ** 2) ** 0.5,
+            )
+        else:
+            width = 1.0
+        if head and width > 1.0:
+            hx = sum(p.x for p in head) / len(head)
+            hy = sum(p.y for p in head) / len(head)
+            dx, dy = shoulder_mid.x - hx, shoulder_mid.y - hy
+            length = max(1e-6, (dx * dx + dy * dy) ** 0.5)
+            reach = width * 1.6
+            hips = [
+                Keypoint(
+                    shoulder_mid.x + dx / length * reach,
+                    shoulder_mid.y + dy / length * reach,
+                    min(p.score for p in shoulders),
+                )
+            ]
+
     if shoulders and hips:
         shoulder_mid = shoulders[0] if len(shoulders) == 1 else _midpoint(*shoulders)
         hip_mid = hips[0] if len(hips) == 1 else _midpoint(*hips)
@@ -355,6 +441,7 @@ def _suggest_motion(
     solid: np.ndarray,
     people: list[dict[str, Keypoint]],
     span_fraction: float,
+    centre: float,
 ) -> dict[str, float]:
     """Motion settings derived from this particular scene.
 
@@ -366,7 +453,11 @@ def _suggest_motion(
     # figure, so every part is on the same side of it and they all slide
     # together, differing only in amount. On the figure's own median depth the
     # chest is in front and the hips behind, and they travel opposite ways.
-    focus = float(np.median(depth[solid])) if solid.any() else 0.5
+    # The plane everything was pulled onto, so a region given zero weight sits
+    # exactly on it and does not move. This has to be the same number
+    # body_part_depth used as its centre, or the regions meant to be still
+    # acquire travel again from the mismatch.
+    focus = float(centre)
 
     # How the figure sits in frame. A wide pose -- seated, arms out, reclining
     # -- has parts spread across both axes and can carry vertical travel; a
@@ -400,6 +491,7 @@ def body_part_depth(
     base_depth: np.ndarray,
     strength: float | None = None,
     pose_id: str = DEFAULT_POSE,
+    weights: ReliefWeights | None = None,
 ) -> np.ndarray:
     """Rebuild the depth inside a figure from its pose.
 
@@ -407,6 +499,9 @@ def body_part_depth(
     figure keeps the distance the depth model gave it, so it still sits
     correctly in the scene; only its internal shape is replaced.
     """
+    from app.core import face_parser
+
+    weights = weights or ReliefWeights()
     rgb = _rgb(image)
     height, width = rgb.shape[:2]
 
@@ -417,6 +512,19 @@ def body_part_depth(
         )
 
     people = pose_people(rgb, pose_id)
+    if not people:
+        # The three pose exports disagree on tight crops and unusual poses:
+        # measured across a set of portraits, MultiPose missed a figure that
+        # Thunder found. Refusing outright when another installed model would
+        # have succeeded is a worse answer than trying it.
+        for spare in POSE_SPECS:
+            if spare == pose_id or not has_file(POSE_SPECS[spare].model):
+                continue
+            people = pose_people(rgb, spare)
+            if people:
+                logger.info("Pose %s found nothing; %s did", pose_id, spare)
+                pose_id = spare
+                break
     if not people:
         raise BodyReliefUnavailable(
             "Found a figure but not its pose. Body Relief needs a mostly "
@@ -460,7 +568,15 @@ def body_part_depth(
             reach = max(
                 (max(abs(pt.x - hx), abs(pt.y - hy)) for pt in head), default=0.0
             )
-            radius = max(reach * 2.6, span * 0.13)
+            # Sized from the face landmarks, never from the figure. The old
+            # floor of span * 0.13 meant a full-length figure produced a head
+            # box the size of its torso, and the parser, which is trained on
+            # tight face crops, then labelled shirt as skin and the wall as
+            # hair. Rendered as a region map that is unmistakable: a rectangular
+            # block of "face" over the whole chest. The cap does the same job
+            # from the other side for a pose whose landmarks came back spread.
+            radius = max(reach * 2.6, span * 0.05)
+            radius = min(radius, span * 0.30)
             heads.append((hx * scale, hy * scale, radius * scale))
 
     if not all_bones:
@@ -472,23 +588,30 @@ def body_part_depth(
 
     field, coverage = _relief_field(all_bones, small_shape, span * scale)
 
-    # Hold the relief off every head. A displaced face pulls its features
-    # apart and it is the first thing anyone looks at.
-    #
-    # Smoothstep on distance, not a Gaussian. A Gaussian never actually
-    # reaches zero, so however steep it was made the head kept taking a share:
-    # measured at 11.8% of face pixels still moving. This is exactly zero
-    # inside the head and exactly one outside it, with a smooth ramp between,
-    # so no step is introduced for the feather to have to fix.
-    if heads:
-        yy, xx = np.mgrid[0:small_shape[0], 0:small_shape[1]].astype(np.float32)
-        for hx, hy, radius in heads:
-            distance = np.sqrt((xx - hx) ** 2 + (yy - hy) ** 2) / max(radius, 1e-6)
-            coverage = coverage * _smoothstep(distance, 1.0, 1.8)
-
     if scale < 1.0:
         field = cv2.resize(field, (width, height), interpolation=cv2.INTER_LINEAR)
         coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_LINEAR)
+
+    # Which pixels of a head are face and which are hair. Up to here the only
+    # thing available was a circle drawn around the averaged face landmarks,
+    # which is wrong in both directions at once: wide enough to cover hair it
+    # swallows the jaw and neck, tight enough to fit the face it lets the
+    # relief onto the forehead, and being one circle it could only ever
+    # exclude hair along with the face. The parser labels them separately, so
+    # the face can be pinned exactly while the hair moves.
+    head_boxes = [(hx / scale, hy / scale, radius / scale) for hx, hy, radius in heads]
+    face_mask, hair_mask = face_parser.head_masks((height, width), rgb, head_boxes)
+    parsed = float(face_mask.max()) > 0.0
+    if not parsed and heads:
+        # No parser installed. Fall back to holding the whole head still,
+        # which is the old behaviour: worse, because the hair stops moving
+        # too, but never wrong in the direction that matters.
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+        for hx, hy, radius in head_boxes:
+            distance = np.sqrt((xx - hx) ** 2 + (yy - hy) ** 2) / max(radius, 1e-6)
+            face_mask = np.maximum(face_mask, 1.0 - _smoothstep(distance, 1.0, 1.8))
+        logger.warning("Face parser not installed; holding whole heads still")
+
 
     # Keep the figures where the depth model put them, and give them the pose
     # field for their shape. A little of the model's own detail rides on top so
@@ -498,19 +621,42 @@ def body_part_depth(
     detail = base_depth - cv2.GaussianBlur(
         base_depth, (0, 0), sigmaX=max(1.0, span * 0.10)
     )
-    spread = BODY_SPREAD if strength is None else max(0.05, float(strength))
+    # The slider says how much separation the user wants; the picture says how
+    # much of it reads. The same offset in depth is a strong effect on a
+    # head-and-shoulders crop and barely visible on a full-length figure across
+    # a room, so a fixed number is wrong for most photographs. Scale it by how
+    # much of the frame the figure actually occupies.
+    base_spread = BODY_SPREAD if strength is None else max(0.05, float(strength))
+    fill = float(solid.mean())
+    scene_scale = float(np.clip(1.35 - 0.85 * min(1.0, fill / 0.32), 0.65, 1.35))
+    spread = base_spread * scene_scale
+    # Hair has no joints, so the bone field says nothing about it. Give it one
+    # value of its own, well forward of the figure's centre, so it travels
+    # against a face that is not moving at all.
+    field = field * (1.0 - hair_mask) + HAIR_RELIEF * hair_mask
     rebuilt = centre + field * spread + detail * MODEL_DETAIL
 
-    # Only where the pose actually reaches. Elsewhere -- background, and any
-    # figure the pose model did not find -- the depth model's map stands.
-    # Exactly zero off the subject. Squaring the mask only made the halo
-    # outside the figure small, not absent -- 7% of background pixels were
-    # still moving. Smoothstep gives a hard zero below 0.55 and a hard one
-    # above 0.85, which puts the whole transition inside the silhouette: every
-    # pixel the segmentation does not call subject keeps the depth model's
-    # value untouched, bit for bit, and nothing beyond the body is ever
-    # displaced differently from before.
-    apply = _smoothstep(mask, 0.55, 0.85) * coverage
+    # How much of the relief each pixel takes, built in two independent halves
+    # so neither can undo the other.
+    #
+    # First, which region a pixel belongs to. These override in priority order,
+    # each replacing rather than adding to what is under it, so a pixel ends up
+    # carrying exactly one region's weight and the numbers in Settings mean
+    # what they say. Face is applied last so it wins over everything: at its
+    # default weight of zero this is exactly zero across every face pixel,
+    # which is the one guarantee this function has to make.
+    region = coverage * weights.body
+    region = region * (1.0 - hair_mask) + hair_mask * weights.hair
+    region = region * (1.0 - face_mask) + face_mask * weights.face
+
+    # Second, the silhouette, as a hard outer clamp that nothing above can
+    # reach past. It is tempting to let hair escape it, since selfie
+    # segmentation does clip the odd flyaway strand, but a dark background
+    # behind dark hair is precisely where the parser mislabels, and any escape
+    # hatch turns that mislabel into a drifting background. Clipped strands
+    # staying still is a far better failure than a moving background, so the
+    # mask wins and hair keeps no exemption.
+    apply = np.clip(_smoothstep(mask, 0.55, 0.85) * region, 0.0, 1.0)
 
     # Fit the rebuilt figure into the room available around its own depth,
     # rather than renormalising the finished map. A global renormalise was
@@ -528,22 +674,101 @@ def body_part_depth(
 
     blended = base_depth * (1.0 - apply) + rebuilt * apply
 
+    # The background, separately and only when asked for. It gets no rebuild:
+    # there are no joints out there to place parts from, and pushing it onto
+    # the figure's plane would be the same "background drags along with the
+    # subject" fault seen from the other side. What it gets is more of the
+    # depth the model already found, stretched around its own median, so a
+    # room reads as deeper without the figure's motion bleeding into it.
+    outside = 1.0 - _smoothstep(mask, 0.55, 0.85)
+    bg_gate = outside * weights.background
+    if weights.background > 0.0 and outside.max() > 0.0:
+        far = outside > 0.5
+        bg_centre = float(np.median(base_depth[far])) if far.any() else 0.5
+        expanded = bg_centre + (base_depth - bg_centre) * (
+            1.0 + BACKGROUND_SPREAD * weights.background
+        )
+        blended = blended * (1.0 - bg_gate) + np.clip(expanded, 0.0, 1.0) * bg_gate
+
+    # Now the part that actually decides what moves.
+    #
+    # Leaving a region "unchanged" is not the same as leaving it still, and
+    # confusing the two is what made every complaint about this feature true at
+    # once. Displacement is (depth - focus), so a background the depth model put
+    # far from the focus plane travels furthest of anything in the frame no
+    # matter how carefully the relief was kept off it: measured on these
+    # photographs, the background moved 60px and the face 51px while the chest
+    # and hips moved 10 to 20. The relief was innocent and the animation was
+    # still wrong.
+    #
+    # So every region is pulled onto the focus plane in proportion to how much
+    # of the relief it was given. A weight of zero now means the region sits
+    # exactly at focus and travels exactly zero pixels, which is what the
+    # sliders in Settings have always looked like they promised.
+    motion_weight = np.full((height, width), weights.background, dtype=np.float32)
+    body_here = _smoothstep(mask, 0.55, 0.85)
+    # Hair only counts where the silhouette agrees there is a person. On the
+    # big-hair portraits the parser labels some of the background behind the
+    # head as hair, and unclamped that handed 85% of the travel to pixels that
+    # are not on anybody: measured, 4% of background moving with excursions of
+    # 43px. Clipped strands going still is the better failure.
+    hair_here = hair_mask * body_here
+    motion_weight = motion_weight * (1.0 - body_here) + body_here * weights.body
+    motion_weight = motion_weight * (1.0 - hair_here) + hair_here * weights.hair
+    motion_weight = motion_weight * (1.0 - face_mask) + face_mask * weights.face
+    blended = centre + (blended - centre) * motion_weight
+
     figure_frac = float(solid.mean())
+    face_frac = float((face_mask > 0.5).mean())
+    hair_frac = float((hair_mask > 0.5).mean())
     logger.info(
-        "Body relief: %d figures, %d bones, %.1f%% of frame, spread %.2f",
+        "Body relief: %d figures, %d bones, %.1f%% of frame, spread %.2f "
+        "(slider %.2f x scene %.2f), "
+        "face %.2f%% at weight %.2f, hair %.2f%% at weight %.2f, parser %s",
         len(spans), len(all_bones), figure_frac * 100, spread,
+        base_spread, scene_scale,
+        face_frac * 100, weights.face, hair_frac * 100, weights.hair,
+        "yes" if parsed else "no",
     )
-    body_part_depth.last_report = (
-        f"{len(spans)} figure{'s' if len(spans) != 1 else ''}, "
-        f"{len(all_bones)} body parts, {figure_frac * 100:.0f}% of frame"
-    )
+    parts = [
+        f"{len(spans)} figure{'s' if len(spans) != 1 else ''}",
+        f"{len(all_bones)} body parts",
+    ]
+    if parsed:
+        parts.append("face held still" if weights.face <= 0.0 else f"face {weights.face:.0%}")
+        parts.append("hair still" if weights.hair <= 0.0 else f"hair {weights.hair:.0%}")
+    else:
+        parts.append("no face parser, whole head held still")
+    body_part_depth.last_report = ", ".join(parts)
     result = np.clip(blended, 0.0, 1.0).astype(np.float32)
     # The gate goes back to the caller so the finished maps can be composited
     # through it. Everything downstream of here -- the feather in particular --
     # blurs across the silhouette, which would carry the figure's new values
     # out into the background however cleanly they were masked here.
-    body_part_depth.last_gate = apply.astype(np.float32)
+    # The whole frame is authored now, not just the figure, so the caller keeps
+    # all of it. The gate used to exist to stop the feather carrying the
+    # figure's new values out across the silhouette into a background that had
+    # been left alone; there is no longer a background being left alone to
+    # protect, and the step at the silhouette is smaller than it was, because
+    # both sides now sit near the same focus plane.
+    body_part_depth.last_gate = np.ones((height, width), dtype=np.float32)
+
+    # Where the answer is "this must not move", stated strongly enough to
+    # survive the feather that runs after this function. Flattening a region
+    # onto the focus plane is not enough on its own: the feather blurs across
+    # the region's outline and drags its edge back off the plane, which
+    # measured as 9 to 16px of travel on a rim around a face that is supposed
+    # to be motionless. The caller re-asserts the plane through this map.
+    #
+    # Both terms are already ramped outside the region they protect: the face
+    # mask was dilated by the full reach of its blur before being feathered,
+    # and the silhouette term ramps across the segmentation's own soft edge. So
+    # re-asserting through them introduces no step inside the region itself.
+    still = face_mask * (1.0 - weights.face)
+    still = np.maximum(still, (1.0 - body_here) * (1.0 - weights.background))
+    still = np.minimum(still, 1.0 - hair_here * weights.hair)
+    body_part_depth.last_still = np.clip(still, 0.0, 1.0).astype(np.float32)
     body_part_depth.suggested_motion = _suggest_motion(
-        result, solid, people, span / max(height, width)
+        result, solid, people, span / max(height, width), centre
     )
     return result

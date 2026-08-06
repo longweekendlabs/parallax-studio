@@ -26,6 +26,22 @@ class AppSettings:
     # Pose model behind Body Relief; see app/core/body_model.py POSE_SPECS
     pose_model: str = "movenet-multipose"
 
+    # ── What Body Relief is allowed to move ──────────────────────────────
+    # Each region has its own share of the relief, 0 meaning it is left exactly
+    # where the depth model put it. These exist because "which parts move" is a
+    # taste decision, not something the app should decide silently.
+    #
+    # Face is off by default and should usually stay off: displacing it pulls
+    # the features apart, and it is the first thing anyone looks at.
+    relief_face: float = 0.0
+    # Hair is the part of a head that has any business bouncing, so it is on.
+    relief_hair: float = 0.85
+    # The torso and limbs, which is what the button is for.
+    relief_body: float = 1.0
+    # Never the background. Kept here so the setting is visible and the value
+    # is one place rather than scattered, but the UI does not offer to raise it.
+    relief_background: float = 0.0
+
 
 def load_settings(path: Path | None = None) -> AppSettings:
     target = path or settings_path()

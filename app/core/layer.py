@@ -34,8 +34,16 @@ class Layer:
     y_offset: int = 0
     scale: float = 1.0
     depth_map: np.ndarray | None = None
-    depth_undo_stack: list[np.ndarray] = field(default_factory=list)
-    depth_redo_stack: list[np.ndarray] = field(default_factory=list)
+    # Bumped by every depth edit, including brush strokes, which write into the
+    # existing array. Caches downstream cannot detect those by identity, so
+    # without this counter a painted stroke never reaches the preview.
+    depth_revision: int = 0
+    # Whether the depth map is currently flipped. Invert is a state the user has
+    # to be able to read off the button, not a one-shot action that leaves no
+    # trace, so the flag rides along with the map through undo and redo.
+    depth_inverted: bool = False
+    depth_undo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
+    depth_redo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
 
     @property
     def file_type(self) -> str:
@@ -87,6 +95,8 @@ class Layer:
             y_offset=self.y_offset,
             scale=self.scale,
             depth_map=None if self.depth_map is None else self.depth_map.copy(),
+            depth_revision=self.depth_revision,
+            depth_inverted=self.depth_inverted,
         )
 
 

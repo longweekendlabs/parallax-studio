@@ -33,13 +33,15 @@ class _Worker(QObject):
 
     def __init__(self, image: QImage, model_id: str, relief: bool = False,
                  relief_strength: float | None = None,
-                 pose_id: str | None = None):
+                 pose_id: str | None = None,
+                 relief_weights=None):
         super().__init__()
         self._image = image
         self._model_id = model_id
         self._relief = relief
         self._relief_strength = relief_strength
         self._pose_id = pose_id
+        self._relief_weights = relief_weights
         self._cancelled = False
 
     def cancel(self):
@@ -91,6 +93,7 @@ class _Worker(QObject):
                 self._image, self._model_id, relief=self._relief,
                 relief_strength=self._relief_strength,
                 pose_id=self._pose_id,
+                relief_weights=self._relief_weights,
             )
             if self._cancelled:
                 return
@@ -106,13 +109,15 @@ class DepthModelDialog(QDialog):
 
     def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False,
                  relief_strength: float | None = None,
-                 pose_id: str | None = None):
+                 pose_id: str | None = None,
+                 relief_weights=None):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
         self._model_id = model_id
         self._relief = relief
         self._relief_strength = relief_strength
         self._pose_id = pose_id
+        self._relief_weights = relief_weights
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
@@ -185,7 +190,7 @@ class DepthModelDialog(QDialog):
     def start(self):
         self._worker = _Worker(
             self._image_ref, self._model_id, self._relief,
-            self._relief_strength, self._pose_id,
+            self._relief_strength, self._pose_id, self._relief_weights,
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)

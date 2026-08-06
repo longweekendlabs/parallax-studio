@@ -395,8 +395,14 @@ class PreviewStage(QWidget):
             or self._event_to_composite_xy(self._hover_pos) is None
         ):
             return
+        # _brush_size arrives already expressed in composite pixels, because
+        # _display_scale converts composite pixels to screen pixels and the
+        # composite is a downscaled preview of the source. Handing it the source
+        # pixel count drew a ring three times wider than the area the stroke
+        # actually covered on a photo-sized image. No ceiling either: a capped
+        # ring stops matching the stroke as soon as the brush or the zoom is
+        # large, which is exactly when the size needs to be believable.
         radius = max(4.0, (self._brush_size * self._current_layer_scale * self._display_scale()) / 2.0)
-        radius = min(radius, 180.0)
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # Just the outline: it says how big the brush is, nothing more. What the
