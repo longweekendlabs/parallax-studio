@@ -42,7 +42,8 @@ Downloaded on first use and kept afterwards, around 70 MB in total. All Apache-2
 
 | Model | Size | Job |
 |---|---|---|
-| Depth Anything V2 Small | 50 MB | Auto Depth |
+| Depth Anything V2 Small | 50 MB | Auto Depth. Default |
+| Depth Anything V2 Small, full precision | 99 MB | Auto Depth, when the half-precision build shows banding |
 | MediaPipe Selfie Segmentation | 0.5 MB | Finding the subject |
 | MoveNet MultiPose | 19 MB | Up to six figures. Default |
 | MoveNet Thunder | 25 MB | One figure, more precise joints |
@@ -50,7 +51,7 @@ Downloaded on first use and kept afterwards, around 70 MB in total. All Apache-2
 
 The pose model is selectable in Settings, as is how far Body Relief separates the parts.
 
-A larger Depth Anything V2 Base is offered as well, but it is CC-BY-NC-4.0 and labelled as such in the app: do not use its output commercially.
+A larger Depth Anything V2 Base, 389 MB, is offered as well, but it is CC-BY-NC-4.0 and labelled as such in the app: do not use its output commercially.
 
 ## Formats
 
