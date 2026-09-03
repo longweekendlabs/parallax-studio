@@ -65,7 +65,7 @@ Windows, Linux x86_64 and macOS Apple Silicon builds are on the [releases page](
 
 ## Feedback
 
-[Open an issue](https://github.com/longweekendlabs/parallax-studio/issues) for a bug or a request. To write privately, email [2272935+longweekendlabs@users.noreply.github.com](mailto:2272935+longweekendlabs@users.noreply.github.com?subject=Parallax%20Studio%20feedback) and mention your version.
+[Open an issue](https://github.com/longweekendlabs/parallax-studio/issues) for a bug or a request.
 
 ## License
 
