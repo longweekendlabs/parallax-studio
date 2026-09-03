@@ -22,11 +22,15 @@ Two buttons generate depth for you.
 
 **Body Relief** is for photographs of people. It finds every figure in the frame and its pose, then rebuilds the depth *inside* each one, so chest, waist, hips, arms and legs each carry their own parallax instead of the whole figure sliding about as a single cutout. It touches the subject only, leaving backgrounds and faces exactly as Auto Depth had them.
 
+![Body Relief separating the chest, arms and legs of a person into distinct visible depth regions](docs/screenshots/body-relief.png)
+
 ![The Parallax Studio window](docs/assets/parallax-studio-ui.png)
 
 ## Or paint it yourself
 
 A depth brush with size, hardness, strength and depth value, over a colour-ramped overlay that actually shows what you have painted. Blue is far, cyan sits on the neutral plane, red is near. Undo and redo throughout.
+
+![The depth brush painting over a blue, cyan and warm colour-ramped depth overlay](docs/screenshots/depth-brush.png)
 
 ## Motion you can judge before you commit
 
