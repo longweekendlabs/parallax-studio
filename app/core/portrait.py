@@ -94,9 +94,14 @@ PORTRAIT_DURATION = 8.0
 FLAUNT_DURATION = 4.0
 BOUNCE_DURATION = 6.0
 
-# The motion reads at its designed strength with the layer and global
-# intensity at their defaults (1.0 and 0.75).
+# The motion reads at its designed strength with the layer intensity here,
+# which is where applying a mode puts the slider, so it can go either way.
 REFERENCE_INTENSITY = 0.75
+
+# The strongest each motion may run, as a multiple of its design. Measured on
+# eight test images: idle folds near 1.2 (its orbit is the largest term),
+# flaunt and bounce stay clear up to the slider's end, 1.33.
+MAX_AMOUNT = {IDLE: 1.1, FLAUNT: 1.33, BOUNCE: 1.33}
 
 # The pose model the rig is read from. The everyday pose setting defaults to
 # MultiPose, which put the eye distance 18% high on one of three test portraits
@@ -260,7 +265,10 @@ def _smoothstep(low: float, high: float, x: np.ndarray) -> np.ndarray:
     return t * t * (3.0 - 2.0 * t)
 
 
-def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np.ndarray | None) -> dict:
+def _fields(
+    layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np.ndarray | None,
+    hold: np.ndarray | None = None,
+) -> dict:
     """The parts of the motion that do not change from frame to frame."""
     height, width = depth.shape
     key = (layer_id, revision, width, height, id(rig), rig.get("style"), id(mask))
@@ -311,6 +319,15 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np
             borderType=cv2.BORDER_CONSTANT, borderValue=0,
         )
         m = np.maximum(cv2.GaussianBlur(m, (0, 0), sigmaX=sigma), hard)
+
+    # Areas brushed with Erase are held still. Feathered as wide as the figure
+    # edge, for the same reason: the motion must stretch across it, not fold.
+    if hold is not None and hold.any():
+        h = hold if hold.shape == (height, width) else cv2.resize(
+            hold, (width, height), interpolation=cv2.INTER_LINEAR
+        )
+        h = cv2.GaussianBlur(h.astype(np.float32), (0, 0), sigmaX=max(1.0, face * 0.4))
+        m = m * (1.0 - np.clip(h, 0.0, 1.0))
 
     yy, xx = np.indices((height, width), dtype=np.float32)
     # Head and hair: 1 above the pivot, fading out down the neck and to the sides.
@@ -376,6 +393,19 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np
             bust_l=lobe(bx - face * 0.8).astype(np.float32),
             bust_r=lobe(bx + face * 0.8).astype(np.float32),
         )
+    fields["whrx"] = fields["wh"] * fields["rel_x"]
+    fields["whry"] = fields["wh"] * fields["rel_y"]
+    # Every frame is a weighted sum of these fields, so each axis keeps them
+    # stacked behind its coordinate grid and a frame is one matrix-vector
+    # product. Summing them one array at a time cost Flaunt 53 ms a preview
+    # frame, under 24 fps; the separate fields are dropped once stacked.
+    names_x, names_y = _TERMS[rig.get("style", IDLE)]
+    fields = {
+        "face": face,
+        "shape": (height, width),
+        "stack_x": np.stack([xx] + [fields[n] for n in names_x]).reshape(len(names_x) + 1, -1),
+        "stack_y": np.stack([yy] + [fields[n] for n in names_y]).reshape(len(names_y) + 1, -1),
+    }
     with _CACHE_LOCK:
         _FIELDS[key] = fields
         while len(_FIELDS) > _MAX_CACHED:
@@ -395,8 +425,16 @@ def _wave(term: tuple[float, float, float], phase: float, duration: float) -> fl
     return amp * math.sin(math.tau * cycles * phase + offset)
 
 
-def _idle(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
-    face = f["face"]
+# The fields each style's motion is a weighted sum of, per axis, in the order
+# its coefficient function returns their weights.
+_TERMS = {
+    IDLE: (("whrx", "whry", "wh", "rel_z", "hips"), ("whrx", "whry", "wh", "rel_z", "chest")),
+    FLAUNT: (("whrx", "whry", "lean", "swing", "chest", "rel_z"), ("whrx", "whry", "m", "tip", "chest", "rel_z")),
+    BOUNCE: ((), ("carry", "bust_l", "bust_r")),
+}
+
+
+def _idle(face: float, phase: float, duration: float) -> tuple[list, list]:
     angle = sum(_wave(t, phase, duration) for t in HEAD_TURN)
     shift_x = face * _wave(HEAD_SHIFT_X, phase, duration)
     shift_y = face * _wave(HEAD_SHIFT_Y, phase, duration)
@@ -407,15 +445,12 @@ def _idle(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarra
     cycles = max(1, int(round(omega * duration / math.tau)))
     breath = face * amp * (0.5 + 0.5 * math.sin(math.tau * cycles * phase + offset))
 
+    # The head block turns about the pivot: (R - I) applied to (p - pivot).
     c, s = math.cos(angle) - 1.0, math.sin(angle)
-    wh, rx, ry = f["wh"], f["rel_x"], f["rel_y"]
-    dx = wh * (c * rx - s * ry + shift_x) + f["rel_z"] * orbit_x + f["hips"] * sway
-    dy = wh * (s * rx + c * ry + shift_y) + f["rel_z"] * orbit_y - f["chest"] * breath
-    return dx, dy
+    return [c, -s, shift_x, orbit_x, sway], [s, c, shift_y, orbit_y, -breath]
 
 
-def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
-    face = f["face"]
+def _flaunt(face: float, phase: float, duration: float) -> tuple[list, list]:
     steps = max(1, int(round(duration / FLAUNT_STEP)))
     t = math.tau * steps * phase
     swing = math.sin(t)
@@ -427,22 +462,21 @@ def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndar
     bounce = face * (
         FLAUNT_BOUNCE * math.sin(2 * t - 0.5) + FLAUNT_JIGGLE * math.sin(4 * t - 1.4)
     )
-    wh, rx, ry = f["wh"], f["rel_x"], f["rel_y"]
-    dx = (
-        wh * (c * rx - s * ry)
-        - f["lean"] * face * FLAUNT_LEAN * swing
-        + f["swing"] * face * FLAUNT_HIP_SWING * swing
-        + f["chest"] * face * FLAUNT_CHEST_LAG * math.sin(t - 0.9)
-        + f["rel_z"] * face * FLAUNT_ORBIT[0] * swing
-    )
-    dy = (
-        wh * (s * rx + c * ry)
-        - f["m"] * bob
-        - f["tip"] * face * FLAUNT_HIP_TIP * swing
-        - f["chest"] * bounce
-        + f["rel_z"] * face * FLAUNT_ORBIT[1] * math.sin(2 * t)
-    )
-    return dx, dy
+    weights_x = [
+        c, -s,
+        -face * FLAUNT_LEAN * swing,
+        face * FLAUNT_HIP_SWING * swing,
+        face * FLAUNT_CHEST_LAG * math.sin(t - 0.9),
+        face * FLAUNT_ORBIT[0] * swing,
+    ]
+    weights_y = [
+        s, c,
+        -bob,
+        -face * FLAUNT_HIP_TIP * swing,
+        -bounce,
+        face * FLAUNT_ORBIT[1] * math.sin(2 * t),
+    ]
+    return weights_x, weights_y
 
 
 def _lift(p: float) -> float:
@@ -450,17 +484,19 @@ def _lift(p: float) -> float:
     return 0.5 - 0.5 * math.cos(math.tau * p)
 
 
-def _bounce(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
-    face = f["face"]
+def _bounce(face: float, phase: float, duration: float) -> tuple[list, list]:
     cycles = max(1, int(round(duration / BOUNCE_STEP)))
     p = (phase * cycles) % 1.0
 
     # Up is negative y. Nothing moves sideways.
-    dy = -f["carry"] * face * BOUNCE_BODY * _lift(p)
-    for lobe, sign in ((f["bust_l"], -1.0), (f["bust_r"], 1.0)):
+    weights_y = [-face * BOUNCE_BODY * _lift(p)]
+    for sign in (-1.0, 1.0):
         trail = BOUNCE_TRAIL + sign * BOUNCE_PAIR_OFFSET
-        dy = dy - lobe * face * BOUNCE_BUST * _lift(p - trail)
-    return np.zeros_like(dy), dy
+        weights_y.append(-face * BOUNCE_BUST * _lift(p - trail))
+    return [], weights_y
+
+
+_WEIGHTS = {IDLE: _idle, FLAUNT: _flaunt, BOUNCE: _bounce}
 
 
 def source_maps(
@@ -474,15 +510,15 @@ def source_maps(
     scale_x: float = 1.0,
     scale_y: float = 1.0,
     mask: np.ndarray | None = None,
+    hold: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Where each output pixel samples from, for cv2.remap."""
-    f = _fields(layer_id, revision, depth, rig, mask)
-    if rig.get("style") == FLAUNT:
-        dx, dy = _flaunt(f, phase, duration)
-    elif rig.get("style") == BOUNCE:
-        dx, dy = _bounce(f, phase, duration)
-    else:
-        dx, dy = _idle(f, phase, duration)
-    map_x = f["xx"] - dx * (amount * scale_x)
-    map_y = f["yy"] - dy * (amount * scale_y)
-    return map_x.astype(np.float32, copy=False), map_y.astype(np.float32, copy=False)
+    f = _fields(layer_id, revision, depth, rig, mask, hold)
+    weights_x, weights_y = _WEIGHTS.get(rig.get("style", IDLE), _idle)(f["face"], phase, duration)
+    # Each map is its grid minus the weighted fields, scaled by the strength.
+    kx, ky = amount * scale_x, amount * scale_y
+    wx = np.array([1.0] + [-kx * w for w in weights_x], dtype=np.float32)
+    wy = np.array([1.0] + [-ky * w for w in weights_y], dtype=np.float32)
+    map_x = (wx @ f["stack_x"]).reshape(f["shape"])
+    map_y = (wy @ f["stack_y"]).reshape(f["shape"])
+    return map_x, map_y

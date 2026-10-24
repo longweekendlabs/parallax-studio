@@ -41,9 +41,13 @@ def ensure_depth_map(layer: Layer) -> np.ndarray:
     return layer.depth_map
 
 
+def _hold_copy(layer: Layer):
+    return None if layer.portrait_hold is None else layer.portrait_hold.copy()
+
+
 def push_depth_undo(layer: Layer) -> None:
     depth = ensure_depth_map(layer)
-    layer.depth_undo_stack.append((depth.copy(), layer.depth_inverted))
+    layer.depth_undo_stack.append((depth.copy(), layer.depth_inverted, _hold_copy(layer)))
     if len(layer.depth_undo_stack) > MAX_UNDO:
         layer.depth_undo_stack.pop(0)
     layer.depth_redo_stack.clear()
@@ -53,8 +57,8 @@ def undo_depth(layer: Layer) -> bool:
     if not layer.depth_undo_stack:
         return False
     current = ensure_depth_map(layer)
-    layer.depth_redo_stack.append((current.copy(), layer.depth_inverted))
-    layer.depth_map, layer.depth_inverted = layer.depth_undo_stack.pop()
+    layer.depth_redo_stack.append((current.copy(), layer.depth_inverted, _hold_copy(layer)))
+    layer.depth_map, layer.depth_inverted, layer.portrait_hold = layer.depth_undo_stack.pop()
     touch_depth(layer)
     return True
 
@@ -63,8 +67,8 @@ def redo_depth(layer: Layer) -> bool:
     if not layer.depth_redo_stack:
         return False
     current = ensure_depth_map(layer)
-    layer.depth_undo_stack.append((current.copy(), layer.depth_inverted))
-    layer.depth_map, layer.depth_inverted = layer.depth_redo_stack.pop()
+    layer.depth_undo_stack.append((current.copy(), layer.depth_inverted, _hold_copy(layer)))
+    layer.depth_map, layer.depth_inverted, layer.portrait_hold = layer.depth_redo_stack.pop()
     touch_depth(layer)
     return True
 
@@ -73,6 +77,7 @@ def clear_depth(layer: Layer) -> None:
     push_depth_undo(layer)
     layer.depth_map = np.full((layer.image.height(), layer.image.width()), 0.5, dtype=np.float32)
     layer.depth_inverted = False
+    layer.portrait_hold = None
     touch_depth(layer)
 
 
@@ -157,6 +162,42 @@ def paint_depth(
     region = depth[y0:y1, x0:x1]
     region[:] = region * (1.0 - alpha) + value * alpha
     np.clip(depth, 0.0, 1.0, out=depth)
+    touch_depth(layer)
+
+
+def paint_hold(
+    layer: Layer,
+    x: int,
+    y: int,
+    size: int,
+    hold: bool,
+    hardness: float,
+    opacity: float,
+) -> None:
+    """Brush the figure motions' hold map: hold=True stills an area, False frees it.
+
+    Same stamp as paint_depth, so the brush feels the same in every mode. The
+    motion feathers the map before using it, so a hard stroke cannot fold.
+    """
+    height, width = layer.image.height(), layer.image.width()
+    if layer.portrait_hold is None or layer.portrait_hold.shape != (height, width):
+        layer.portrait_hold = np.zeros((height, width), dtype=np.float32)
+    target = layer.portrait_hold
+    radius = max(1, int(size / 2))
+    x0, y0 = max(0, x - radius), max(0, y - radius)
+    x1, y1 = min(width, x + radius + 1), min(height, y + radius + 1)
+    if x0 >= x1 or y0 >= y1:
+        return
+    hardness = float(np.clip(hardness, 0.0, 1.0))
+    opacity = float(np.clip(opacity, 0.0, 1.0))
+    yy, xx = np.ogrid[y0:y1, x0:x1]
+    dist = np.sqrt((xx - x) ** 2 + (yy - y) ** 2).astype(np.float32)
+    hard_radius = float(radius * min(hardness, 0.99))
+    soft_width = max(1.0, float(radius - hard_radius))
+    soft_alpha = np.clip(1.0 - (dist - hard_radius) / soft_width, 0.0, 1.0)
+    alpha = (np.where(dist <= hard_radius, 1.0, soft_alpha) * opacity).astype(np.float32)
+    region = target[y0:y1, x0:x1]
+    region[:] = region * (1.0 - alpha) + (1.0 if hold else 0.0) * alpha
     touch_depth(layer)
 
 

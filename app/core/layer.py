@@ -42,14 +42,20 @@ class Layer:
     # to be able to read off the button, not a one-shot action that leaves no
     # trace, so the flag rides along with the map through undo and redo.
     depth_inverted: bool = False
-    depth_undo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
-    depth_redo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
+    # (depth, inverted, portrait_hold) per step; the hold is None outside the
+    # figure motions.
+    depth_undo_stack: list[tuple] = field(default_factory=list)
+    depth_redo_stack: list[tuple] = field(default_factory=list)
     # Set by Portrait: head, neck pivot, chest and eye distance in source
     # pixels (app/core/portrait.py). While set, the layer plays the portrait
     # motion instead of the depth-plane motion.
     portrait_rig: dict | None = None
     # Where the figure is, 0..1, so the portrait motion leaves a background still.
     portrait_mask: np.ndarray | None = None
+    # 0..1 painted by Erase while a figure motion is on: 1 holds that area
+    # still. The depth brush has nothing to say about these motions, which
+    # take their movement from the figure, not from depth.
+    portrait_hold: np.ndarray | None = None
 
     @property
     def file_type(self) -> str:
@@ -105,6 +111,7 @@ class Layer:
             depth_inverted=self.depth_inverted,
             portrait_rig=None if self.portrait_rig is None else dict(self.portrait_rig),
             portrait_mask=None if self.portrait_mask is None else self.portrait_mask.copy(),
+            portrait_hold=None if self.portrait_hold is None else self.portrait_hold.copy(),
         )
 
 

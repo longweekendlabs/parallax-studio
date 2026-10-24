@@ -4,6 +4,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -628,6 +629,8 @@ class ControlsPanel(QWidget):
         col.setSpacing(6)
 
         self._preview_fps = 24
+        self._figure_mode = False
+        self._motion_ready = False
 
         depth = Card("⌁", "DEPTH BRUSH")
         self._brush_reference = BRUSH_REFERENCE_DEFAULT
@@ -677,6 +680,10 @@ class ControlsPanel(QWidget):
         self.paint_mode_button.clicked.connect(lambda: self._set_brush_mode(False))
         self.erase_mode_button.clicked.connect(lambda: self._set_brush_mode(True))
         depth.layout.addLayout(mode_row)
+        # Kept so a figure motion can swap these for its own and put them back.
+        self._paint_tooltip = self.paint_mode_button.toolTip()
+        self._erase_tooltip = self.erase_mode_button.toolTip()
+        self._depth_value_tooltip = self.depth_value.toolTip()
 
         buttons = QGridLayout()
         buttons.setHorizontalSpacing(8)
@@ -926,9 +933,56 @@ class ControlsPanel(QWidget):
         self.loop_type._sync()
         self.layer_intensity.setValue(max(0, min(100, int(round(layer.intensity * 100)))), emit=False)
         self.layer_intensity.slider.setEnabled(True)
+        self.set_figure_mode(bool(getattr(layer, "portrait_rig", None)))
+
+    def set_figure_mode(self, active: bool):
+        """Grey out what Portrait, Flaunt and Bounce ignore, and say what the brush does.
+
+        Those motions move the figure by its rig and mask, not by depth, so
+        Zoom, Focus, the Loop type and Depth Value have nothing to act on, and
+        the brush edits what moves instead of depth.
+        """
+        self._figure_mode = active
+        self._apply_figure_mode()
+
+    def _apply_figure_mode(self):
+        active = self._figure_mode
+        ignored = "Not used by Portrait, Flaunt or Bounce, which move the figure itself."
+        for widget in (self.zoom_strength, self.focus_depth, self.loop_type):
+            if active:
+                widget.setEnabled(False)
+                _set_tooltip_tree(widget, ignored)
+            elif self._motion_ready:
+                widget.setEnabled(True)
+                _set_tooltip_tree(widget, self.motion_tooltips.get(widget, ""))
+        self.depth_value.setEnabled(not active)
+        # These custom-drawn controls look the same disabled as enabled, so
+        # dim them, or a slider that does nothing reads as a broken one.
+        for widget in (self.zoom_strength, self.focus_depth, self.loop_type, self.depth_value):
+            if active:
+                effect = QGraphicsOpacityEffect(widget)
+                effect.setOpacity(0.35)
+                widget.setGraphicsEffect(effect)
+            else:
+                widget.setGraphicsEffect(None)
+        _set_tooltip_tree(
+            self.depth_value,
+            "Not used while a figure motion is on: Paint and Erase choose what moves."
+            if active else self._depth_value_tooltip,
+        )
+        if active:
+            self.paint_mode_button.setToolTip("Brush an area to let it move again after Erase.")
+            self.erase_mode_button.setToolTip(
+                "Brush an area to hold it still while she moves. The edge is feathered "
+                "so the motion stretches across it instead of tearing. Undo works as usual."
+            )
+        else:
+            self.paint_mode_button.setToolTip(self._paint_tooltip)
+            self.erase_mode_button.setToolTip(self._erase_tooltip)
 
     def set_motion_ready(self, has_layer: bool, has_depth_motion: bool):
         ready = has_layer and has_depth_motion
+        self._motion_ready = ready
         for widget in self.motion_widgets:
             widget.setEnabled(ready)
             _set_tooltip_tree(
@@ -941,6 +995,7 @@ class ControlsPanel(QWidget):
         # Once motion is usable the notice is just telling the user something
         # they have already done, at the cost of ~75px of panel height.
         self.motion_notice.setVisible(not ready)
+        self._apply_figure_mode()
         if not has_layer:
             self.motion_notice.setText("Open or drop an image layer first. Motion controls stay disabled until there is artwork and depth variation.")
         elif not has_depth_motion:

@@ -24,6 +24,7 @@ from collections import deque
 
 from app.core.animator import loop_phase, motion_amplitude
 import cv2
+import numpy as np
 
 from app.core.compositor import composite_animated_layers, composite_layers
 from app.core.depth import (
@@ -36,6 +37,7 @@ from app.core.depth import (
     paint_depth,
     push_depth_undo,
     redo_depth,
+    paint_hold,
     relax_paint_folds,
     touch_depth,
     undo_depth,
@@ -331,6 +333,11 @@ class TopBar(QWidget):
         updates = menu.addAction("Check for Updates")
         updates.setEnabled(False)
         menu.exec(self.more_button.mapToGlobal(self.more_button.rect().bottomRight()))
+
+
+def _copy_step(step: tuple) -> tuple:
+    """A depth undo step with its arrays copied."""
+    return tuple(value.copy() if isinstance(value, np.ndarray) else value for value in step)
 
 
 class MainWindow(QMainWindow):
@@ -955,8 +962,13 @@ class MainWindow(QMainWindow):
             "scale": layer.scale,
             "depth_map": None if layer.depth_map is None else layer.depth_map.copy(),
             "depth_inverted": layer.depth_inverted,
-            "depth_undo_stack": [(depth.copy(), flipped) for depth, flipped in layer.depth_undo_stack],
-            "depth_redo_stack": [(depth.copy(), flipped) for depth, flipped in layer.depth_redo_stack],
+            "depth_undo_stack": [_copy_step(step) for step in layer.depth_undo_stack],
+            "depth_redo_stack": [_copy_step(step) for step in layer.depth_redo_stack],
+            # Without these a project-level undo (move, reorder, delete) rebuilt
+            # the layer without its figure motion.
+            "portrait_rig": None if layer.portrait_rig is None else dict(layer.portrait_rig),
+            "portrait_mask": None if layer.portrait_mask is None else layer.portrait_mask.copy(),
+            "portrait_hold": None if layer.portrait_hold is None else layer.portrait_hold.copy(),
         }
 
     def _project_snapshot(self) -> tuple[list[dict], str | None]:
@@ -986,8 +998,14 @@ class MainWindow(QMainWindow):
                 depth_map=None if data["depth_map"] is None else data["depth_map"].copy(),
                 depth_inverted=data.get("depth_inverted", False),
             )
-            layer.depth_undo_stack = [(depth.copy(), flipped) for depth, flipped in data["depth_undo_stack"]]
-            layer.depth_redo_stack = [(depth.copy(), flipped) for depth, flipped in data["depth_redo_stack"]]
+            layer.depth_undo_stack = [_copy_step(step) for step in data["depth_undo_stack"]]
+            layer.depth_redo_stack = [_copy_step(step) for step in data["depth_redo_stack"]]
+            rig = data.get("portrait_rig")
+            layer.portrait_rig = None if rig is None else dict(rig)
+            mask = data.get("portrait_mask")
+            layer.portrait_mask = None if mask is None else mask.copy()
+            hold = data.get("portrait_hold")
+            layer.portrait_hold = None if hold is None else hold.copy()
             restored.append(layer)
         self.layers = restored
         self.selected_layer_id = selected_id if selected_id in {layer.id for layer in restored} else (restored[-1].id if restored else None)
@@ -1415,6 +1433,18 @@ class MainWindow(QMainWindow):
         if composite is None or layer is None or not layer.visible:
             return None
         depth = ensure_depth_map(layer)
+        if layer.portrait_rig:
+            # A figure motion does not move by depth, so show what moves
+            # instead: red moves, blue is held still (the background, and
+            # anything brushed with Erase).
+            moving = (
+                layer.portrait_mask.astype(np.float32)
+                if layer.portrait_mask is not None
+                else np.ones_like(depth)
+            )
+            if layer.portrait_hold is not None:
+                moving = moving * (1.0 - np.clip(layer.portrait_hold, 0.0, 1.0))
+            depth = 0.15 + 0.7 * moving
         # The overlay is drawn into the composite, which is a downscaled preview
         # for anything past PREVIEW_MAX_DIM, so the depth map has to be measured
         # in the same space. Drawing it at source resolution pinned the top left
@@ -1493,6 +1523,19 @@ class MainWindow(QMainWindow):
 
         for x, y in points:
             erase_mode = self.brush_settings.erase
+            if layer.portrait_rig:
+                # The figure motions do not move by depth, so the brush edits
+                # what moves instead: Erase holds an area still, Paint frees it.
+                paint_hold(
+                    layer,
+                    x,
+                    y,
+                    self.brush_settings.size,
+                    erase_mode,
+                    self.brush_settings.hardness,
+                    max(0.55, self.brush_settings.opacity) if erase_mode else self.brush_settings.opacity,
+                )
+                continue
             paint_depth(
                 layer,
                 x,
@@ -1518,7 +1561,7 @@ class MainWindow(QMainWindow):
         # raising Hardness or Depth Value one notch above the defaults tears the
         # edge of the area that was just painted.
         layer = self._selected_layer()
-        if was_painting and layer is not None and relax_paint_folds(layer):
+        if was_painting and layer is not None and not layer.portrait_rig and relax_paint_folds(layer):
             self._request_depth_overlay_refresh()
         if self._preview_paused_for_paint and self._motion_preview_ready():
             self._preview_paused_for_paint = False
@@ -1603,6 +1646,7 @@ class MainWindow(QMainWindow):
         layer.portrait_mask = None
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
+        self.controls.set_figure_mode(False)
         self.status_controller.info(f"Cleared depth for {layer.name}")
 
     def _invert_selected_depth(self):
@@ -1722,6 +1766,7 @@ class MainWindow(QMainWindow):
             layer.depth_inverted = False
             layer.portrait_rig = None
             layer.portrait_mask = None
+            layer.portrait_hold = None
             touch_depth(layer)
             if relief:
                 from app.core.body_model import body_part_depth
@@ -1744,10 +1789,12 @@ class MainWindow(QMainWindow):
             auto_depth(layer)
             layer.portrait_rig = None
             layer.portrait_mask = None
+            layer.portrait_hold = None
             source = "built-in heuristic"
 
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
+        self.controls.set_figure_mode(False)
         self.status_controller.info(f"Depth generated for {layer.name} using {source}")
 
     def _portrait_selected(self, style: str = "idle"):
@@ -1788,18 +1835,20 @@ class MainWindow(QMainWindow):
         layer.depth_inverted = False
         layer.portrait_rig = dict(dialog.rig, style=style)
         layer.portrait_mask = dialog.mask
+        layer.portrait_hold = None
         touch_depth(layer)
-        # The motion is designed at full strength on both axes. Idle wants the
+        # Intensity sits at the design strength, mid-slider, so it can be
+        # turned up as well as down. Idle wants the
         # longest loop, the closest this app gets to the reference's 14-second
         # orbit; flaunt wants two swings and bounce two ovals.
-        layer.intensity = 1.0
+        layer.intensity = portrait.REFERENCE_INTENSITY
         layer.movement_strength = 1.0
         layer.motion_scale_x = 1.0
         layer.motion_scale_y = 1.0
         layer.duration = duration
         self.motion_settings = _dc.replace(
             self.motion_settings,
-            layer_intensity=1.0,
+            layer_intensity=portrait.REFERENCE_INTENSITY,
             movement_strength=1.0,
             motion_scale_x=1.0,
             motion_scale_y=1.0,
@@ -1809,6 +1858,8 @@ class MainWindow(QMainWindow):
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self._request_preview_refresh()
+        self.controls.set_figure_mode(True)
+        self._request_depth_overlay_refresh()
         self.status_controller.info(f"{name} motion on {layer.name}")
 
     def closeEvent(self, event):
