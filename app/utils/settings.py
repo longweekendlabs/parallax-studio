@@ -17,7 +17,7 @@ class AppSettings:
     # bundled, and the CPU renderer produces the same frames either way.
     gpu_export: bool = False
     gpu_encode: bool = True
-    # Depth model used by Portrait, Flaunt and Body Relief; see app/core/depth_model.py
+    # Depth model used by Auto Depth, Body Relief, Portrait, Flaunt and Bounce; see app/core/depth_model.py
     depth_model: str = "dav2-small-fp16"
     # How far apart Body Relief pushes the parts of a figure. Must match
     # body_model.BODY_SPREAD, which is the same number for callers that do not

@@ -54,7 +54,7 @@ class ModelSetupDialog(QDialog):
         )
         head_lay.addWidget(title)
         blurb = QLabel(
-            "Portrait, Flaunt and Body Relief run entirely on this machine. Each model "
+            "Auto Depth, Body Relief and the figure motions run entirely on this machine. Each model "
             "is downloaded once from its original publisher and then used offline. "
             "Nothing is sent anywhere."
         )
