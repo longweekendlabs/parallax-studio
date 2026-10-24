@@ -20,12 +20,12 @@ swing side to side while the shoulders lean against them (an S-curve), the
 raised hip tips up, the chest bounces twice per swing and the head tilts
 toward the raised hip.
 
-The bounce style moves her whole body in one slow, squeezed oval, tall and
-narrow, with the legs giving a little toward the feet. The head and hair ride
-it at a third of the travel, so they stay calm. The breasts follow the body
-late, overshoot and settle, the way soft tissue trails what carries it, so
-they travel well past the body; left and right are slightly out of step and
-spread a little sideways.
+The bounce style is bouncing on the spot, feet on the ground: the body goes
+straight up and down with a quick dip and a rounder top, full from the hips up
+and fading to nothing at the feet, so the legs bend instead of her lifting
+off. The head rides it. The breasts hang on a damped spring driven by that
+motion, so they lag, snap after each dip and settle, vertically only, left and
+right slightly out of step. Nothing moves sideways.
 
 Everything is driven by one depth map, a figure mask and a few points (head,
 neck pivot, chest, hips, eye distance). The points come from the pose model
@@ -74,20 +74,20 @@ FLAUNT_ORBIT = (0.22, 0.04)
 # Knees and feet keep this much of the hip swing, so she is not skating.
 FLAUNT_PLANTED = 0.3
 
-# Bounce, in eye distances. One oval takes BOUNCE_STEP seconds.
-BOUNCE_STEP = 2.5
-BOUNCE_BODY = (0.035, 0.12)  # whole body, sideways and up-down: the oval
-BOUNCE_HEAD_SHARE = 0.35     # how much of the body's travel the head carries
-BOUNCE_FEET_SHARE = 0.5      # and the feet, so she is not floating
-BOUNCE_ORBIT = 0.08
-# The breasts, on top of the body. They trail it by BOUNCE_LAG radians, then
-# overshoot and settle: the overtones are what a spring catching up looks
-# like, kept as whole harmonics so the loop still closes.
-BOUNCE_BUST_LIFT = 0.16
-BOUNCE_BUST_SIDE = 0.05
-BOUNCE_LAG = 0.9
-BOUNCE_SETTLE = ((0.35, 2.0), (0.15, 3.1))   # (share, extra lag) at 2x, 3x
-BOUNCE_PAIR_OFFSET = 0.18    # left and right breast out of step, radians
+# Bounce, in eye distances. One bounce takes BOUNCE_STEP seconds.
+BOUNCE_STEP = 1.25
+BOUNCE_BODY = 0.20           # body, straight up and down
+BOUNCE_HEAD_SHARE = 0.8      # of the body's travel, so the neck does not stretch
+# How sharp the dip is: 0 is a hard kink at the bottom, larger is rounder.
+BOUNCE_DIP = 0.15
+# Visible feet do not move. When she is cropped above them the lowest row of
+# her still carries this much, since the knees are below the frame.
+BOUNCE_CROPPED_SHARE = 0.25
+# The breasts, on top of the body: how far, and the spring they hang on.
+BOUNCE_BUST = 0.34
+BOUNCE_SPRING_HZ = 2.4
+BOUNCE_SPRING_DAMPING = 0.25
+BOUNCE_PAIR_OFFSET = 0.025   # left and right out of step, fraction of a bounce
 
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
 # longest loop keeps the idle motion closest to the reference; flaunt reads
@@ -355,9 +355,14 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np
             tip=(tip_band * tip_side * m).astype(np.float32),
         )
     if rig.get("style") == BOUNCE:
-        # What the body oval carries: all of the torso, less toward the feet,
-        # a share of it on the head block.
-        legs = 1.0 - (1.0 - BOUNCE_FEET_SHARE) * _smoothstep(iy + face, iy + face * 6.0, yy)
+        # What the bounce carries: everything from the hips up, fading to
+        # nothing at the feet so the legs bend; a share of it on the head block.
+        if mask is not None and hard.any():
+            feet = float(np.nonzero(hard.any(axis=1))[0].max())
+        else:
+            feet = float(height - 1)
+        floor = BOUNCE_CROPPED_SHARE if feet >= height - 2 else 0.0
+        legs = 1.0 - (1.0 - floor) * _smoothstep(iy, max(iy + face, feet), yy)
         carry = (wh * BOUNCE_HEAD_SHARE + body * legs) * m
         # One soft lobe per breast either side of the bust point.
         bust_at = rig.get("bust") or [rig["chest"][0], rig["chest"][1] + rig["face"] * 0.3]
@@ -442,27 +447,58 @@ def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndar
     return dx, dy
 
 
+_SPRING_TABLES: dict[tuple[int, float], tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _bounce_tables(period: float) -> tuple[np.ndarray, np.ndarray]:
+    """Body lift and breast offset over one bounce, sampled finely.
+
+    The body's lift is a rectified sine: a quick dip and a rounder top. The
+    breasts hang on a damped spring driven by it; their offset is the spring's
+    steady-state response, worked out per harmonic, so it repeats exactly every
+    bounce and the loop closes. The sharp dip is what excites the spring, which
+    is where the snap and the small settle come from.
+    """
+    key = (512, round(period, 4))
+    cached = _SPRING_TABLES.get(key)
+    if cached is not None:
+        return cached
+    n = key[0]
+    theta = np.linspace(0.0, math.tau, n, endpoint=False)
+    half = np.sin(theta / 2.0)
+    lift = np.sqrt(half * half + BOUNCE_DIP ** 2) - BOUNCE_DIP
+    lift /= lift.max()
+
+    w0 = math.tau * BOUNCE_SPRING_HZ
+    zeta = BOUNCE_SPRING_DAMPING
+    harmonics = np.fft.rfft(lift)
+    omega = math.tau * np.arange(harmonics.size) / period
+    # Breast position x driven by body y: x'' = w0^2 (y - x) + 2 zeta w0 (y' - x')
+    gain = (w0 * w0 + 2j * zeta * w0 * omega) / (w0 * w0 - omega * omega + 2j * zeta * w0 * omega)
+    offset = np.fft.irfft(harmonics * (gain - 1.0), n)
+    offset /= max(1e-6, float(np.abs(offset).max()))
+    _SPRING_TABLES[key] = (lift.astype(np.float32), offset.astype(np.float32))
+    return _SPRING_TABLES[key]
+
+
+def _sample(table: np.ndarray, phase: float) -> float:
+    pos = (phase % 1.0) * table.size
+    i = int(pos)
+    frac = pos - i
+    return float(table[i % table.size] * (1.0 - frac) + table[(i + 1) % table.size] * frac)
+
+
 def _bounce(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
     face = f["face"]
     cycles = max(1, int(round(duration / BOUNCE_STEP)))
-    t = math.tau * cycles * phase
+    lift, offset = _bounce_tables(duration / cycles)
+    p = (phase * cycles) % 1.0
 
-    # The body's oval. Up is negative y.
-    body_x = face * BOUNCE_BODY[0] * math.cos(t)
-    body_y = -face * BOUNCE_BODY[1] * math.sin(t)
-    dx = f["carry"] * body_x + f["rel_z"] * face * BOUNCE_ORBIT * math.cos(t)
-    dy = f["carry"] * body_y
-
-    # Each breast trails the body, then overshoots and settles.
+    # Up is negative y. Nothing moves sideways.
+    dy = -f["carry"] * face * BOUNCE_BODY * _sample(lift, p)
     for lobe, sign in ((f["bust_l"], -1.0), (f["bust_r"], 1.0)):
-        u = t - BOUNCE_LAG + sign * BOUNCE_PAIR_OFFSET
-        lift = math.sin(u) + sum(
-            share * math.sin(n * u - lag) for n, (share, lag) in enumerate(BOUNCE_SETTLE, 2)
-        )
-        dy = dy - lobe * face * BOUNCE_BUST_LIFT * lift
-        # Sideways they follow the body, and spread apart a little as they lift.
-        dx = dx + lobe * face * BOUNCE_BUST_SIDE * (math.cos(u) + sign * 0.5 * math.sin(u))
-    return dx, dy
+        dy = dy - lobe * face * BOUNCE_BUST * _sample(offset, p + sign * BOUNCE_PAIR_OFFSET)
+    return np.zeros_like(dy), dy
 
 
 def source_maps(
