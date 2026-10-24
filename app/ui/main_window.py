@@ -491,6 +491,7 @@ class MainWindow(QMainWindow):
         self.controls.clearDepthRequested.connect(self._clear_selected_depth)
         self.controls.invertDepthRequested.connect(self._invert_selected_depth)
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
+        self.controls.autoDepthRequested.connect(lambda: self._auto_depth_selected(False))
         self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
         self.controls.portraitRequested.connect(lambda: self._portrait_selected("idle"))
         self.controls.flauntRequested.connect(lambda: self._portrait_selected("flaunt"))
