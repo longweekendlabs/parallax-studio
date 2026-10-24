@@ -491,9 +491,9 @@ class MainWindow(QMainWindow):
         self.controls.clearDepthRequested.connect(self._clear_selected_depth)
         self.controls.invertDepthRequested.connect(self._invert_selected_depth)
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
-        self.controls.autoDepthRequested.connect(lambda: self._auto_depth_selected(False))
         self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
-        self.controls.portraitRequested.connect(self._portrait_selected)
+        self.controls.portraitRequested.connect(lambda: self._portrait_selected(False))
+        self.controls.flauntRequested.connect(lambda: self._portrait_selected(True))
         self._push_brush_preview()
         self.timeline.set_time(0.0, 0.0)
         self.top_bar.fps_selector.set_value(self.motion_settings.preview_fps, emit=False)
@@ -1598,6 +1598,7 @@ class MainWindow(QMainWindow):
             return
         clear_depth(layer)
         layer.portrait_rig = None
+        layer.portrait_mask = None
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self.status_controller.info(f"Cleared depth for {layer.name}")
@@ -1718,6 +1719,7 @@ class MainWindow(QMainWindow):
             layer.depth_map = dialog.depth_map
             layer.depth_inverted = False
             layer.portrait_rig = None
+            layer.portrait_mask = None
             touch_depth(layer)
             if relief:
                 from app.core.body_model import body_part_depth
@@ -1739,15 +1741,20 @@ class MainWindow(QMainWindow):
         else:
             auto_depth(layer)
             layer.portrait_rig = None
+            layer.portrait_mask = None
             source = "built-in heuristic"
 
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self.status_controller.info(f"Depth generated for {layer.name} using {source}")
 
-    def _portrait_selected(self):
-        """Depth and a head rig for the portrait motion (app/core/portrait.py)."""
-        from app.core.portrait import PORTRAIT_DURATION, PORTRAIT_POSE
+    def _portrait_selected(self, flaunt: bool = False):
+        """Depth, figure mask and head rig for the portrait motion (app/core/portrait.py)."""
+        from app.core import portrait
+        from app.core.portrait import PORTRAIT_POSE
+
+        name = "Flaunt" if flaunt else "Portrait"
+        duration = portrait.FLAUNT_DURATION if flaunt else portrait.PORTRAIT_DURATION
 
         layer = self._selected_layer()
         if layer is None:
@@ -1755,7 +1762,7 @@ class MainWindow(QMainWindow):
             return
         model_id = self.settings.depth_model
         if not depth_model.get_model(model_id).filename or not depth_model.is_available():
-            self.status_controller.warning("Portrait needs a depth model. Pick one in Settings.")
+            self.status_controller.warning(f"{name} needs a depth model. Pick one in Settings.")
             return
 
         dialog = DepthModelDialog(
@@ -1764,40 +1771,41 @@ class MainWindow(QMainWindow):
         dialog.set_image(layer.image)
         dialog.start()
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.depth_map is None:
-            self.status_controller.warning("Portrait did not run, so the layer is unchanged")
+            self.status_controller.warning(f"{name} did not run, so the layer is unchanged")
             return
         if dialog.rig is None:
             self.status_controller.warning(
-                "Portrait found no face in this layer, so the layer is unchanged"
+                f"{name} found no face in this layer, so the layer is unchanged"
             )
             return
 
         push_depth_undo(layer)
         layer.depth_map = dialog.depth_map
         layer.depth_inverted = False
-        layer.portrait_rig = dialog.rig
+        layer.portrait_rig = dict(dialog.rig, style=portrait.FLAUNT if flaunt else portrait.IDLE)
+        layer.portrait_mask = dialog.mask
         touch_depth(layer)
-        # The motion is designed at these: full strength on both axes and the
-        # longest loop, which is the closest this app gets to the reference's
-        # 14-second orbit.
+        # The motion is designed at full strength on both axes. Idle wants the
+        # longest loop, the closest this app gets to the reference's 14-second
+        # orbit; flaunt wants two swings.
         layer.intensity = 1.0
         layer.movement_strength = 1.0
         layer.motion_scale_x = 1.0
         layer.motion_scale_y = 1.0
-        layer.duration = PORTRAIT_DURATION
+        layer.duration = duration
         self.motion_settings = _dc.replace(
             self.motion_settings,
             layer_intensity=1.0,
             movement_strength=1.0,
             motion_scale_x=1.0,
             motion_scale_y=1.0,
-            duration=PORTRAIT_DURATION,
+            duration=duration,
         )
         self.controls.set_motion_settings(self.motion_settings)
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self._request_preview_refresh()
-        self.status_controller.info(f"Portrait motion on {layer.name}")
+        self.status_controller.info(f"{name} motion on {layer.name}")
 
     def closeEvent(self, event):
         size = self.size()

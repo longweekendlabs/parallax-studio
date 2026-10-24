@@ -1,11 +1,11 @@
-"""Portrait motion: the "alive" idle motion for a single figure.
+"""Portrait motion: idle and flaunt motion for a single figure.
 
-Auto Depth moves every pixel by its own depth around a fixed focus plane. On a
-portrait that is exactly wrong: the depth model sees the nose nearer than the
-ears (measured, a 0.24 depth spread across one face), so the face stretches and
-squashes by 30-50% of its area on every loop.
+Moving every pixel by its own depth around a fixed focus plane is exactly
+wrong for a person: the depth model sees the nose nearer than the ears
+(measured, a 0.24 depth spread across one face), so the face stretched and
+squashed by 30-50% of its area on every loop.
 
-This mode is ported from the working reference in Thornline
+The idle style is ported from the working reference in Thornline
 (``Game_04_thornline/shaders/portrait.gdshader`` ``alive_source``):
 
 - the head and hair move as one rigid block, a slow turn and shift about the
@@ -15,9 +15,16 @@ This mode is ported from the working reference in Thornline
 - the hips sway sideways out of step with the orbit;
 - the chest lifts with each breath, and never widens.
 
-All of it is driven by one depth map and four points (head, neck pivot,
-chest, eye distance). The points come from the pose model Body Relief already
-uses, so this adds no download and no non-commercial model.
+The flaunt style keeps the same rigid head and adds a rhythm on top: the hips
+swing side to side while the shoulders lean against them (an S-curve), the
+raised hip tips up, the chest bounces twice per swing and the head tilts
+toward the raised hip.
+
+Everything is driven by one depth map, a figure mask and a few points (head,
+neck pivot, chest, hips, eye distance). The points come from the pose model
+Body Relief already uses, so this adds no non-commercial model. The mask keeps
+a background still: a cut-out's own alpha, otherwise the person segmentation
+Body Relief uses.
 """
 from __future__ import annotations
 
@@ -31,6 +38,9 @@ from PySide6.QtGui import QImage
 
 from app.core import depth_model
 
+IDLE = "idle"
+FLAUNT = "flaunt"
+
 # Thornline's numbers, in units of the eye distance ("face") and seconds.
 # Each entry is (amplitude, angular frequency rad/s, phase).
 HEAD_TURN = ((0.02 * 0.65, 0.83, 0.0), (0.02 * 0.35, 1.37, 1.3))   # radians
@@ -41,10 +51,26 @@ ORBIT_Y = (0.08, 0.31, 1.0)
 HIP_SWAY = (0.12, 0.45, 2.4)
 BREATH = (0.07, 1.4, 0.0)
 
+# Flaunt, in eye distances (radians for the tilt). One full left-right swing
+# takes FLAUNT_STEP seconds; everything else is a harmonic of it.
+FLAUNT_STEP = 2.0
+FLAUNT_HIP_SWING = 0.30      # hips sideways
+FLAUNT_LEAN = 0.10           # shoulders, against the hips
+FLAUNT_HIP_TIP = 0.10        # raised hip up, the other down
+FLAUNT_BOUNCE = 0.09         # chest, twice per swing
+FLAUNT_JIGGLE = 0.03         # chest, the overtone that makes it settle
+FLAUNT_CHEST_LAG = 0.05      # chest sideways, trailing the swing
+FLAUNT_BOB = 0.035           # whole figure, twice per swing
+FLAUNT_HEAD_TILT = 0.035
+FLAUNT_ORBIT = (0.22, 0.04)
+# Knees and feet keep this much of the hip swing, so she is not skating.
+FLAUNT_PLANTED = 0.3
+
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
-# longest loop keeps the motion closest to the reference, so applying the mode
-# sets it.
+# longest loop keeps the idle motion closest to the reference; flaunt reads
+# best as two swings.
 PORTRAIT_DURATION = 8.0
+FLAUNT_DURATION = 4.0
 
 # The motion reads at its designed strength with the layer and global
 # intensity at their defaults (1.0 and 0.75).
@@ -81,12 +107,35 @@ def _flatten(image: QImage) -> tuple[np.ndarray, np.ndarray]:
     return rgb.astype(np.uint8), alpha
 
 
-def portrait_depth(rgb: np.ndarray, alpha: np.ndarray, model_id: str) -> np.ndarray:
+def figure_mask(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """0..1, where the figure is. Hard-edged; the motion feathers it.
+
+    A cut-out already says where she is. A picture with a background goes
+    through the person segmentation; on gallery renders it found the figure
+    cleanly but left holes in the lower legs, so holes are filled and small
+    gaps closed.
+    """
+    if float(alpha.min()) < 0.99:
+        return (alpha > 0.5).astype(np.float32)
+    from app.core import body_model
+
+    mask = (body_model.person_mask(rgb) > 0.5).astype(np.uint8)
+    height, width = mask.shape
+    k = max(3, int(max(height, width) * 0.02)) | 1
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    # Fill enclosed holes: flood the background from the border, keep the rest.
+    flood = np.pad(1 - mask, 1, constant_values=1)
+    reach = np.zeros((height + 4, width + 4), np.uint8)
+    cv2.floodFill(flood, reach, (0, 0), 2)
+    filled = (flood[1:-1, 1:-1] != 2).astype(np.float32)
+    return filled
+
+
+def portrait_depth(rgb: np.ndarray, body: np.ndarray, model_id: str) -> np.ndarray:
     """0 far .. 1 near over the figure's own pixels, softened.
 
-    Normalised over the figure rather than the frame, with the empty canvas
-    set to the far end, so a cut-out's background stays flat instead of
-    picking up the slope the model gives empty space.
+    Normalised over the figure rather than the frame, with everything else set
+    to the far end, so the figure's own relief uses the whole range.
     """
     session = depth_model.open_session(depth_model.file_path(depth_model.get_model(model_id)), model_id)
     height, width = rgb.shape[:2]
@@ -99,21 +148,21 @@ def portrait_depth(rgb: np.ndarray, alpha: np.ndarray, model_id: str) -> np.ndar
     raw = session.run([session.get_outputs()[0].name], {inp.name: x})[0]
     depth = cv2.resize(np.squeeze(raw).astype(np.float32), (width, height), interpolation=cv2.INTER_CUBIC)
 
-    body = alpha > 0.5
-    if body.sum() < 64:
-        body = np.ones_like(body)
-    lo, hi = np.percentile(depth[body], (3, 97))
+    inside = body > 0.5
+    if inside.sum() < 64:
+        inside = np.ones_like(inside)
+    lo, hi = np.percentile(depth[inside], (3, 97))
     depth = np.clip((depth - lo) / max(1e-6, float(hi - lo)), 0.0, 1.0)
-    depth[~body] = 0.0
-    # Hard steps at the outline and between limbs tear when displaced.
+    depth[~inside] = 0.0
     # Thornline's PIL blur radius, which PIL treats as the standard deviation.
+    # Hard steps at the outline and between limbs tear when displaced.
     sigma = float(max(6, width // 60))
     depth = cv2.GaussianBlur(depth, (0, 0), sigmaX=sigma)
     return np.clip(depth, 0.0, 1.0).astype(np.float32)
 
 
 def portrait_rig(rgb: np.ndarray, pose_id: str) -> dict | None:
-    """Head, neck pivot and chest points plus the eye distance, in pixels.
+    """Head, neck pivot, chest and hip points plus the eye distance, in pixels.
 
     Same construction as Thornline's rig, with the mouth placed from the eyes
     because the pose model does not find one. None when no face is found.
@@ -146,21 +195,31 @@ def portrait_rig(rgb: np.ndarray, pose_id: str) -> dict | None:
     chin = mouth + down * span * 0.75
     pivot = chin + down * span * 0.55
     chest = chin + down * span * 2.6
+    if "left_hip" in kp and "right_hip" in kp:
+        hips = (np.array(kp["left_hip"][:2], np.float32) + np.array(kp["right_hip"][:2], np.float32)) / 2
+    else:
+        hips = chest + down * span * 2.8
     height, width = rgb.shape[:2]
+    point = lambda v: [float(v[0]), float(v[1])]
     return {
-        "head": [float(head[0]), float(head[1])],
-        "pivot": [float(pivot[0]), float(pivot[1])],
-        "chest": [float(chest[0]), float(chest[1])],
+        "head": point(head),
+        "pivot": point(pivot),
+        "chest": point(chest),
+        "hips": point(hips),
         "face": float(span),
         "width": width,
         "height": height,
+        "style": IDLE,
     }
 
 
-def prepare(image: QImage, model_id: str, pose_id: str) -> tuple[np.ndarray, dict | None]:
-    """Depth map and rig for a layer. The rig is None if no face was found."""
+def prepare(
+    image: QImage, model_id: str, pose_id: str
+) -> tuple[np.ndarray, dict | None, np.ndarray]:
+    """Depth map, rig and figure mask for a layer. The rig is None if no face was found."""
     rgb, alpha = _flatten(image)
-    return portrait_depth(rgb, alpha, model_id), portrait_rig(rgb, pose_id)
+    mask = figure_mask(rgb, alpha)
+    return portrait_depth(rgb, mask, model_id), portrait_rig(rgb, pose_id), mask
 
 
 def _smoothstep(low: float, high: float, x: np.ndarray) -> np.ndarray:
@@ -168,10 +227,10 @@ def _smoothstep(low: float, high: float, x: np.ndarray) -> np.ndarray:
     return t * t * (3.0 - 2.0 * t)
 
 
-def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict) -> dict:
+def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np.ndarray | None) -> dict:
     """The parts of the motion that do not change from frame to frame."""
     height, width = depth.shape
-    key = (layer_id, revision, width, height, id(rig))
+    key = (layer_id, revision, width, height, id(rig), rig.get("style"), id(mask))
     with _CACHE_LOCK:
         cached = _FIELDS.get(key)
         if cached is not None:
@@ -185,6 +244,40 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict) -> dict:
     hx, hy = rig["head"][0] * sx, rig["head"][1] * sy
     px, py = rig["pivot"][0] * sx, rig["pivot"][1] * sy
     cx, cy = rig["chest"][0] * sx, rig["chest"][1] * sy
+    hips = rig.get("hips") or [rig["chest"][0], rig["chest"][1] + rig["face"] * 2.8]
+    ix, iy = hips[0] * sx, hips[1] * sy
+    iy = max(iy, cy + face)
+
+    # Motion is confined to the figure. The falloff sits entirely outside her,
+    # so every figure pixel moves in full and the face stays rigid even where
+    # it meets the outline. It has to be wide: flaunt carries the hips 0.3 face
+    # sideways, and a 0.15-face feather dropped that to zero fast enough to fold
+    # the picture at the side of a seated figure (Jacobian -0.12). Over this
+    # band the background beside her stretches instead. Without a mask (older
+    # projects) everything moves.
+    if mask is None:
+        m = np.ones((height, width), np.float32)
+    else:
+        hard = mask if mask.shape == (height, width) else cv2.resize(
+            mask, (width, height), interpolation=cv2.INTER_LINEAR
+        )
+        hard = (hard > 0.5).astype(np.float32)
+        # Specks thinner than this are not figure. One stripe has a single
+        # opaque pixel column down its edge, which moved in full beside a
+        # background that did not and folded there.
+        speck = max(3, int(face * 0.1)) | 1
+        hard = cv2.morphologyEx(
+            hard, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (speck, speck))
+        )
+        sigma = max(1.0, face * 0.4)
+        grow = max(1, int(round(sigma * 2.0)))
+        # A zero border: dilate's default counts beyond the frame as figure,
+        # which set a band down the frame edge moving and folded it.
+        m = cv2.dilate(
+            hard, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow * 2 + 1,) * 2),
+            borderType=cv2.BORDER_CONSTANT, borderValue=0,
+        )
+        m = np.maximum(cv2.GaussianBlur(m, (0, 0), sigmaX=sigma), hard)
 
     yy, xx = np.indices((height, width), dtype=np.float32)
     # Head and hair: 1 above the pivot, fading out down the neck and to the sides.
@@ -196,21 +289,36 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict) -> dict:
     r = max(1, int(face * 0.6))
     patch = depth[max(0, int(hy) - r):int(hy) + r + 1, max(0, int(hx) - r):int(hx) + r + 1]
     z_head = float(patch.mean()) if patch.size else 0.5
-    rel_z = (depth - z_head) * (1.0 - wh)
-    hips = _smoothstep(cy, cy + face * 2.8, yy)
-    wc = np.exp(-(((xx - cx) / 2.6) ** 2 + ((yy - cy) / 2.0) ** 2) / (face * face)) * (1.0 - wh)
+    body = 1.0 - wh
+    rel_z = (depth - z_head) * body * m
+    sway = _smoothstep(cy, cy + face * 2.8, yy) * m
+    wc = np.exp(-(((xx - cx) / 2.6) ** 2 + ((yy - cy) / 2.0) ** 2) / (face * face)) * body * m
 
     fields = {
         "face": face,
-        "wh": wh.astype(np.float32),
+        "m": m,
+        "wh": (wh * m).astype(np.float32),
         "rel_x": (xx - px).astype(np.float32),
         "rel_y": (yy - py).astype(np.float32),
         "rel_z": rel_z.astype(np.float32),
-        "hips": hips.astype(np.float32),
+        "hips": sway.astype(np.float32),
         "chest": wc.astype(np.float32),
         "xx": xx,
         "yy": yy,
     }
+    if rig.get("style") == FLAUNT:
+        # Hips swing, the upper body leans the other way, the legs stay planted.
+        swing = _smoothstep(cy, iy, yy) * (
+            1.0 - (1.0 - FLAUNT_PLANTED) * _smoothstep(iy + face, iy + face * 5.0, yy)
+        )
+        lean = 1.0 - _smoothstep(cy, iy, yy)
+        tip_band = np.exp(-(((yy - iy) / (face * 2.2)) ** 2)) * body
+        tip_side = np.clip((xx - ix) / (face * 1.5), -1.0, 1.0)
+        fields.update(
+            swing=(swing * m).astype(np.float32),
+            lean=(lean * m).astype(np.float32),
+            tip=(tip_band * tip_side * m).astype(np.float32),
+        )
     with _CACHE_LOCK:
         _FIELDS[key] = fields
         while len(_FIELDS) > _MAX_CACHED:
@@ -230,21 +338,8 @@ def _wave(term: tuple[float, float, float], phase: float, duration: float) -> fl
     return amp * math.sin(math.tau * cycles * phase + offset)
 
 
-def source_maps(
-    layer_id: str,
-    revision: int,
-    depth: np.ndarray,
-    rig: dict,
-    phase: float,
-    duration: float,
-    amount: float,
-    scale_x: float = 1.0,
-    scale_y: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Where each output pixel samples from, for cv2.remap."""
-    f = _fields(layer_id, revision, depth, rig)
+def _idle(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
     face = f["face"]
-
     angle = sum(_wave(t, phase, duration) for t in HEAD_TURN)
     shift_x = face * _wave(HEAD_SHIFT_X, phase, duration)
     shift_y = face * _wave(HEAD_SHIFT_Y, phase, duration)
@@ -259,7 +354,58 @@ def source_maps(
     wh, rx, ry = f["wh"], f["rel_x"], f["rel_y"]
     dx = wh * (c * rx - s * ry + shift_x) + f["rel_z"] * orbit_x + f["hips"] * sway
     dy = wh * (s * rx + c * ry + shift_y) + f["rel_z"] * orbit_y - f["chest"] * breath
+    return dx, dy
 
+
+def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
+    face = f["face"]
+    steps = max(1, int(round(duration / FLAUNT_STEP)))
+    t = math.tau * steps * phase
+    swing = math.sin(t)
+
+    # The head tilts toward the raised hip and rides the lean and the bob.
+    angle = FLAUNT_HEAD_TILT * math.sin(t + 0.6)
+    c, s = math.cos(angle) - 1.0, math.sin(angle)
+    bob = face * FLAUNT_BOB * math.sin(2 * t + 0.3)
+    bounce = face * (
+        FLAUNT_BOUNCE * math.sin(2 * t - 0.5) + FLAUNT_JIGGLE * math.sin(4 * t - 1.4)
+    )
+    wh, rx, ry = f["wh"], f["rel_x"], f["rel_y"]
+    dx = (
+        wh * (c * rx - s * ry)
+        - f["lean"] * face * FLAUNT_LEAN * swing
+        + f["swing"] * face * FLAUNT_HIP_SWING * swing
+        + f["chest"] * face * FLAUNT_CHEST_LAG * math.sin(t - 0.9)
+        + f["rel_z"] * face * FLAUNT_ORBIT[0] * swing
+    )
+    dy = (
+        wh * (s * rx + c * ry)
+        - f["m"] * bob
+        - f["tip"] * face * FLAUNT_HIP_TIP * swing
+        - f["chest"] * bounce
+        + f["rel_z"] * face * FLAUNT_ORBIT[1] * math.sin(2 * t)
+    )
+    return dx, dy
+
+
+def source_maps(
+    layer_id: str,
+    revision: int,
+    depth: np.ndarray,
+    rig: dict,
+    phase: float,
+    duration: float,
+    amount: float,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Where each output pixel samples from, for cv2.remap."""
+    f = _fields(layer_id, revision, depth, rig, mask)
+    if rig.get("style") == FLAUNT:
+        dx, dy = _flaunt(f, phase, duration)
+    else:
+        dx, dy = _idle(f, phase, duration)
     map_x = f["xx"] - dx * (amount * scale_x)
     map_y = f["yy"] - dy * (amount * scale_y)
     return map_x.astype(np.float32, copy=False), map_y.astype(np.float32, copy=False)
