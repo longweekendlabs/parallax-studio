@@ -34,8 +34,9 @@ class _Worker(QObject):
     def __init__(self, image: QImage, model_id: str, relief: bool = False,
                  relief_strength: float | None = None,
                  pose_id: str | None = None,
-                 relief_weights=None):
+                 relief_weights=None, portrait: bool = False):
         super().__init__()
+        self._portrait = portrait
         self._image = image
         self._model_id = model_id
         self._relief = relief
@@ -69,7 +70,12 @@ class _Worker(QObject):
         try:
             if not self._fetch(depth_model.get_model(self._model_id)):
                 return
-            if self._relief:
+            if self._portrait:
+                from app.core import body_model
+
+                if not self._fetch(body_model.pose_spec(self._pose_id or body_model.DEFAULT_POSE).model):
+                    return
+            elif self._relief:
                 # Body relief needs the person and pose models on top of the
                 # depth model; each is fetched once and kept.
                 from app.core import body_model
@@ -89,6 +95,16 @@ class _Worker(QObject):
                 "Finding the body and its parts..." if self._relief
                 else "Analysing image depth...",
             )
+            if self._portrait:
+                from app.core import portrait
+
+                self.progress.emit(0, 0, "Finding the face and depth...")
+                result = portrait.prepare(
+                    self._image, self._model_id, self._pose_id or body_model.DEFAULT_POSE
+                )
+                if not self._cancelled:
+                    self.finished.emit(result)
+                return
             depth = depth_model.estimate_depth(
                 self._image, self._model_id, relief=self._relief,
                 relief_strength=self._relief_strength,
@@ -110,9 +126,12 @@ class DepthModelDialog(QDialog):
     def __init__(self, image: QImage, model_id: str, parent=None, relief: bool = False,
                  relief_strength: float | None = None,
                  pose_id: str | None = None,
-                 relief_weights=None):
+                 relief_weights=None, portrait: bool = False):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
+        # Portrait only: the head rig, or None when no face was found.
+        self.rig: dict | None = None
+        self._portrait = portrait
         self._model_id = model_id
         self._relief = relief
         self._relief_strength = relief_strength
@@ -129,7 +148,13 @@ class DepthModelDialog(QDialog):
             already = already and body_model.models_ready(
                 pose_id or body_model.DEFAULT_POSE
             )
-        title = "Body Relief" if relief else "Auto Depth"
+        elif portrait:
+            from app.core import body_model
+
+            already = already and depth_model.has_file(
+                body_model.pose_spec(pose_id or body_model.DEFAULT_POSE).model
+            )
+        title = "Portrait" if portrait else "Body Relief" if relief else "Auto Depth"
         self.setWindowTitle(title if already else "Download Depth Model")
         self.setModal(True)
         self.setFixedWidth(430)
@@ -191,6 +216,7 @@ class DepthModelDialog(QDialog):
         self._worker = _Worker(
             self._image_ref, self._model_id, self._relief,
             self._relief_strength, self._pose_id, self._relief_weights,
+            self._portrait,
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
@@ -215,6 +241,8 @@ class DepthModelDialog(QDialog):
 
     @Slot(object)
     def _on_finished(self, depth):
+        if self._portrait:
+            depth, self.rig = depth
         self.depth_map = depth
         self._stop_thread()
         self.accept()

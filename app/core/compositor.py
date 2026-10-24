@@ -6,7 +6,7 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 
 from app.core.animator import motion_offset
-from app.core.animator import displace_layer
+from app.core.animator import displace_layer, displace_portrait
 from app.core.layer import Layer
 
 
@@ -66,6 +66,10 @@ def composite_animated_layers(
 
     for layer in visible_layers:
         intensity = max(0.0, layer.intensity * global_intensity)
+        if layer.portrait_rig:
+            frame = displace_portrait(layer, phase, intensity)
+            _draw_layer(painter, layer, frame, width, height)
+            continue
         dx, dy, zoom = motion_offset(
             layer.motion_scale_x,
             layer.motion_scale_y,
@@ -75,14 +79,18 @@ def composite_animated_layers(
             loop_type=loop_type,
         )
         frame = displace_layer(layer, dx * intensity, dy * intensity, zoom * intensity, layer.focus_depth if layer.focus_depth is not None else depth_focus)
-        if layer.scale != 1.0:
-            sw = max(1, int(frame.width() * layer.scale))
-            sh = max(1, int(frame.height() * layer.scale))
-            frame = frame.scaled(sw, sh, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        painter.setOpacity(max(0.0, min(1.0, layer.opacity)))
-        x = (width - frame.width()) // 2 + layer.x_offset
-        y = (height - frame.height()) // 2 + layer.y_offset
-        painter.drawImage(QRect(x, y, frame.width(), frame.height()), frame)
+        _draw_layer(painter, layer, frame, width, height)
 
     painter.end()
     return composite
+
+
+def _draw_layer(painter: QPainter, layer: Layer, frame: QImage, width: int, height: int) -> None:
+    if layer.scale != 1.0:
+        sw = max(1, int(frame.width() * layer.scale))
+        sh = max(1, int(frame.height() * layer.scale))
+        frame = frame.scaled(sw, sh, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    painter.setOpacity(max(0.0, min(1.0, layer.opacity)))
+    x = (width - frame.width()) // 2 + layer.x_offset
+    y = (height - frame.height()) // 2 + layer.y_offset
+    painter.drawImage(QRect(x, y, frame.width(), frame.height()), frame)

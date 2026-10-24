@@ -44,6 +44,10 @@ class Layer:
     depth_inverted: bool = False
     depth_undo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
     depth_redo_stack: list[tuple[np.ndarray, bool]] = field(default_factory=list)
+    # Set by Portrait: head, neck pivot, chest and eye distance in source
+    # pixels (app/core/portrait.py). While set, the layer plays the portrait
+    # motion instead of the depth-plane motion.
+    portrait_rig: dict | None = None
 
     @property
     def file_type(self) -> str:
@@ -97,6 +101,7 @@ class Layer:
             depth_map=None if self.depth_map is None else self.depth_map.copy(),
             depth_revision=self.depth_revision,
             depth_inverted=self.depth_inverted,
+            portrait_rig=None if self.portrait_rig is None else dict(self.portrait_rig),
         )
 
 

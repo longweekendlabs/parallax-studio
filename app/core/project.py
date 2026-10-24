@@ -57,6 +57,8 @@ class ProjectSerializer:
                 "y_offset": layer.y_offset,
                 "scale": layer.scale,
             }
+            if layer.portrait_rig:
+                layer_data["portrait_rig"] = layer.portrait_rig
 
             if layer.depth_map is not None:
                 # Compress depth map (float32 -> bytes -> zlib -> base64)
@@ -123,6 +125,8 @@ class ProjectSerializer:
             layer.x_offset = l_data.get("x_offset", 0)
             layer.y_offset = l_data.get("y_offset", 0)
             layer.scale = l_data.get("scale", 1.0)
+            rig = l_data.get("portrait_rig")
+            layer.portrait_rig = rig if isinstance(rig, dict) and "face" in rig else None
 
             if "depth_map" in l_data and "depth_width" in l_data and "depth_height" in l_data:
                 try:
