@@ -20,12 +20,11 @@ swing side to side while the shoulders lean against them (an S-curve), the
 raised hip tips up, the chest bounces twice per swing and the head tilts
 toward the raised hip.
 
-The bounce style is a jump on the spot, driven from the hips: the body rises
-and falls on a jump's arc, hanging at the top and landing sharply, full from
-the hips up and fading to nothing at the feet, so the legs bend instead of her
-lifting off. The head rides it. The breasts hang on a damped spring driven by that
-motion, so they lag, snap after each dip and settle, vertically only, left and
-right slightly out of step. Nothing moves sideways.
+The bounce style is a slow, smooth bounce on the spot, driven from the hips:
+the body rises and falls, full from the hips up and fading to nothing at the
+feet, so the legs bend instead of her lifting off. The head rides it. The
+breasts move in time with it, further, trailing it slightly. Nothing moves
+sideways.
 
 Everything is driven by one depth map, a figure mask and a few points (head,
 neck pivot, chest, hips, eye distance). The points come from the pose model
@@ -75,27 +74,25 @@ FLAUNT_ORBIT = (0.22, 0.04)
 FLAUNT_PLANTED = 0.3
 
 # Bounce, in eye distances. One bounce takes BOUNCE_STEP seconds.
-BOUNCE_STEP = 0.85
-BOUNCE_BODY = 0.35           # body, straight up and down
+BOUNCE_STEP = 1.5
+BOUNCE_BODY = 0.30           # body, straight up and down
 BOUNCE_HEAD_SHARE = 0.9      # of the body's travel, so the neck does not stretch
-# How long the landing takes, as a fraction of a bounce. The arc itself has a
-# hard corner at the bottom; this rounds it just enough not to look clipped.
-BOUNCE_LANDING = 0.025
 # Visible feet do not move. When she is cropped above them the lowest row of
 # her still carries this much, since the knees are below the frame.
 BOUNCE_CROPPED_SHARE = 0.25
-# The breasts, on top of the body: how far, and the spring they hang on.
-BOUNCE_BUST = 0.50
-BOUNCE_SPRING_HZ = 2.0
-BOUNCE_SPRING_DAMPING = 0.18
-BOUNCE_PAIR_OFFSET = 0.025   # left and right out of step, fraction of a bounce
+# The breasts, on top of the body: the same smooth rise and fall, further, and
+# trailing it by this fraction of a bounce. A resonant spring here was tried
+# and read as moving to its own rhythm, out of time with her.
+BOUNCE_BUST = 0.35
+BOUNCE_TRAIL = 0.06
+BOUNCE_PAIR_OFFSET = 0.01    # left and right out of step, fraction of a bounce
 
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
 # longest loop keeps the idle motion closest to the reference; flaunt reads
 # best as two swings.
 PORTRAIT_DURATION = 8.0
 FLAUNT_DURATION = 4.0
-BOUNCE_DURATION = 5.0
+BOUNCE_DURATION = 6.0
 
 # The motion reads at its designed strength with the layer and global
 # intensity at their defaults (1.0 and 0.75).
@@ -448,60 +445,21 @@ def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndar
     return dx, dy
 
 
-_SPRING_TABLES: dict[tuple[int, float], tuple[np.ndarray, np.ndarray]] = {}
-
-
-def _bounce_tables(period: float) -> tuple[np.ndarray, np.ndarray]:
-    """Body lift and breast offset over one bounce, sampled finely.
-
-    The body's lift is a jump's arc, a parabola per bounce: it hangs at the top
-    and lands sharply. The breasts hang on a damped spring driven by it; their offset is the spring's
-    steady-state response, worked out per harmonic, so it repeats exactly every
-    bounce and the loop closes. The sharp landing is what excites the spring,
-    which is where the snap and the settle come from.
-    """
-    key = (512, round(period, 4))
-    cached = _SPRING_TABLES.get(key)
-    if cached is not None:
-        return cached
-    n = key[0]
-    u = np.linspace(-1.0, 1.0, n, endpoint=False)
-    lift = 1.0 - u * u
-    # Round the landing with a short circular blur, then back to 0..1.
-    dist = np.minimum(np.arange(n), n - np.arange(n)).astype(np.float64)
-    k = np.exp(-0.5 * (dist / max(1e-6, BOUNCE_LANDING * n)) ** 2)
-    lift = np.real(np.fft.ifft(np.fft.fft(lift) * np.fft.fft(k / k.sum())))
-    lift = (lift - lift.min()) / (lift.max() - lift.min())
-
-    w0 = math.tau * BOUNCE_SPRING_HZ
-    zeta = BOUNCE_SPRING_DAMPING
-    harmonics = np.fft.rfft(lift)
-    omega = math.tau * np.arange(harmonics.size) / period
-    # Breast position x driven by body y: x'' = w0^2 (y - x) + 2 zeta w0 (y' - x')
-    gain = (w0 * w0 + 2j * zeta * w0 * omega) / (w0 * w0 - omega * omega + 2j * zeta * w0 * omega)
-    offset = np.fft.irfft(harmonics * (gain - 1.0), n)
-    offset /= max(1e-6, float(np.abs(offset).max()))
-    _SPRING_TABLES[key] = (lift.astype(np.float32), offset.astype(np.float32))
-    return _SPRING_TABLES[key]
-
-
-def _sample(table: np.ndarray, phase: float) -> float:
-    pos = (phase % 1.0) * table.size
-    i = int(pos)
-    frac = pos - i
-    return float(table[i % table.size] * (1.0 - frac) + table[(i + 1) % table.size] * frac)
+def _lift(p: float) -> float:
+    """0 at rest, 1 at the top: one smooth rise and fall per bounce."""
+    return 0.5 - 0.5 * math.cos(math.tau * p)
 
 
 def _bounce(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
     face = f["face"]
     cycles = max(1, int(round(duration / BOUNCE_STEP)))
-    lift, offset = _bounce_tables(duration / cycles)
     p = (phase * cycles) % 1.0
 
     # Up is negative y. Nothing moves sideways.
-    dy = -f["carry"] * face * BOUNCE_BODY * _sample(lift, p)
+    dy = -f["carry"] * face * BOUNCE_BODY * _lift(p)
     for lobe, sign in ((f["bust_l"], -1.0), (f["bust_r"], 1.0)):
-        dy = dy - lobe * face * BOUNCE_BUST * _sample(offset, p + sign * BOUNCE_PAIR_OFFSET)
+        trail = BOUNCE_TRAIL + sign * BOUNCE_PAIR_OFFSET
+        dy = dy - lobe * face * BOUNCE_BUST * _lift(p - trail)
     return np.zeros_like(dy), dy
 
 
