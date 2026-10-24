@@ -234,7 +234,7 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(_caption("Depth"))
         lay.addSpacing(2)
-        add("depth", "Auto Depth")
+        add("depth", "Depth Model")
         add("relief", "Body Relief")
         lay.addSpacing(14)
         lay.addWidget(_caption("System"))
@@ -283,7 +283,7 @@ class SettingsDialog(QDialog):
     # ── pages ───────────────────────────────────────────────────────────────
 
     def _depth_page(self) -> QWidget:
-        page, lay = self._page("Auto Depth")
+        page, lay = self._page("Depth Model")
 
         self.model_combo = QComboBox()
         for model in depth_model.MODELS:
@@ -432,10 +432,10 @@ class SettingsDialog(QDialog):
 
             available = list(ort.get_available_providers())
         except Exception:
-            return "ONNX Runtime is not installed, so Auto Depth and Body Relief are unavailable."
+            return "ONNX Runtime is not installed, so Portrait, Flaunt and Body Relief are unavailable."
         if "CUDAExecutionProvider" in available:
             return (
-                "Running on CUDA. Auto Depth and Body Relief use the GPU, which "
+                "Running on CUDA. Portrait, Flaunt and Body Relief use the GPU, which "
                 "is roughly twice as fast as the CPU on this machine."
             )
         return (

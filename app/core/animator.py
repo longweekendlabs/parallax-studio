@@ -246,6 +246,7 @@ def displace_portrait(layer: Layer, phase: float, intensity: float) -> QImage:
         amount,
         max(0.0, min(1.0, layer.motion_scale_x)),
         max(0.0, min(1.0, layer.motion_scale_y)),
+        layer.portrait_mask,
     )
     displaced = cv2.remap(
         source,

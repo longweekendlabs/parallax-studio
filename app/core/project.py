@@ -59,6 +59,10 @@ class ProjectSerializer:
             }
             if layer.portrait_rig:
                 layer_data["portrait_rig"] = layer.portrait_rig
+            if layer.portrait_mask is not None:
+                mask = (np.clip(layer.portrait_mask, 0.0, 1.0) * 255).astype(np.uint8)
+                layer_data["portrait_mask"] = base64.b64encode(zlib.compress(mask.tobytes())).decode("ascii")
+                layer_data["portrait_mask_shape"] = list(mask.shape)
 
             if layer.depth_map is not None:
                 # Compress depth map (float32 -> bytes -> zlib -> base64)
@@ -127,6 +131,15 @@ class ProjectSerializer:
             layer.scale = l_data.get("scale", 1.0)
             rig = l_data.get("portrait_rig")
             layer.portrait_rig = rig if isinstance(rig, dict) and "face" in rig else None
+            if "portrait_mask" in l_data and "portrait_mask_shape" in l_data:
+                try:
+                    raw = zlib.decompress(base64.b64decode(l_data["portrait_mask"]))
+                    h, w = l_data["portrait_mask_shape"]
+                    layer.portrait_mask = (
+                        np.frombuffer(raw, dtype=np.uint8).reshape((h, w)).astype(np.float32) / 255.0
+                    )
+                except Exception:
+                    layer.portrait_mask = None
 
             if "depth_map" in l_data and "depth_width" in l_data and "depth_height" in l_data:
                 try:

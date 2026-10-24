@@ -73,8 +73,12 @@ class _Worker(QObject):
             if self._portrait:
                 from app.core import body_model
 
-                if not self._fetch(body_model.pose_spec(self._pose_id or body_model.DEFAULT_POSE).model):
-                    return
+                for extra in (
+                    body_model.pose_spec(self._pose_id or body_model.DEFAULT_POSE).model,
+                    body_model.SEGMENT_MODEL,
+                ):
+                    if not self._fetch(extra):
+                        return
             elif self._relief:
                 # Body relief needs the person and pose models on top of the
                 # depth model; each is fetched once and kept.
@@ -129,8 +133,10 @@ class DepthModelDialog(QDialog):
                  relief_weights=None, portrait: bool = False):
         super().__init__(parent)
         self.depth_map: np.ndarray | None = None
-        # Portrait only: the head rig, or None when no face was found.
+        # Portrait only: the head rig (None when no face was found) and the
+        # figure mask.
         self.rig: dict | None = None
+        self.mask: np.ndarray | None = None
         self._portrait = portrait
         self._model_id = model_id
         self._relief = relief
@@ -151,10 +157,12 @@ class DepthModelDialog(QDialog):
         elif portrait:
             from app.core import body_model
 
-            already = already and depth_model.has_file(
-                body_model.pose_spec(pose_id or body_model.DEFAULT_POSE).model
+            already = already and all(
+                depth_model.has_file(m)
+                for m in (body_model.pose_spec(pose_id or body_model.DEFAULT_POSE).model,
+                          body_model.SEGMENT_MODEL)
             )
-        title = "Portrait" if portrait else "Body Relief" if relief else "Auto Depth"
+        title = "Portrait" if portrait else "Body Relief" if relief else "Depth"
         self.setWindowTitle(title if already else "Download Depth Model")
         self.setModal(True)
         self.setFixedWidth(430)
@@ -242,7 +250,7 @@ class DepthModelDialog(QDialog):
     @Slot(object)
     def _on_finished(self, depth):
         if self._portrait:
-            depth, self.rig = depth
+            depth, self.rig, self.mask = depth
         self.depth_map = depth
         self._stop_thread()
         self.accept()
