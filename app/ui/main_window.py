@@ -492,8 +492,9 @@ class MainWindow(QMainWindow):
         self.controls.invertDepthRequested.connect(self._invert_selected_depth)
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
         self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
-        self.controls.portraitRequested.connect(lambda: self._portrait_selected(False))
-        self.controls.flauntRequested.connect(lambda: self._portrait_selected(True))
+        self.controls.portraitRequested.connect(lambda: self._portrait_selected("idle"))
+        self.controls.flauntRequested.connect(lambda: self._portrait_selected("flaunt"))
+        self.controls.bounceRequested.connect(lambda: self._portrait_selected("bounce"))
         self._push_brush_preview()
         self.timeline.set_time(0.0, 0.0)
         self.top_bar.fps_selector.set_value(self.motion_settings.preview_fps, emit=False)
@@ -1748,13 +1749,15 @@ class MainWindow(QMainWindow):
         self._refresh_layers(refresh_panel=False)
         self.status_controller.info(f"Depth generated for {layer.name} using {source}")
 
-    def _portrait_selected(self, flaunt: bool = False):
+    def _portrait_selected(self, style: str = "idle"):
         """Depth, figure mask and head rig for the portrait motion (app/core/portrait.py)."""
         from app.core import portrait
         from app.core.portrait import PORTRAIT_POSE
 
-        name = "Flaunt" if flaunt else "Portrait"
-        duration = portrait.FLAUNT_DURATION if flaunt else portrait.PORTRAIT_DURATION
+        name, duration = {
+            portrait.FLAUNT: ("Flaunt", portrait.FLAUNT_DURATION),
+            portrait.BOUNCE: ("Bounce", portrait.BOUNCE_DURATION),
+        }.get(style, ("Portrait", portrait.PORTRAIT_DURATION))
 
         layer = self._selected_layer()
         if layer is None:
@@ -1782,12 +1785,12 @@ class MainWindow(QMainWindow):
         push_depth_undo(layer)
         layer.depth_map = dialog.depth_map
         layer.depth_inverted = False
-        layer.portrait_rig = dict(dialog.rig, style=portrait.FLAUNT if flaunt else portrait.IDLE)
+        layer.portrait_rig = dict(dialog.rig, style=style)
         layer.portrait_mask = dialog.mask
         touch_depth(layer)
         # The motion is designed at full strength on both axes. Idle wants the
         # longest loop, the closest this app gets to the reference's 14-second
-        # orbit; flaunt wants two swings.
+        # orbit; flaunt wants two swings and bounce two ovals.
         layer.intensity = 1.0
         layer.movement_strength = 1.0
         layer.motion_scale_x = 1.0
