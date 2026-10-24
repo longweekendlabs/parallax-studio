@@ -20,10 +20,10 @@ swing side to side while the shoulders lean against them (an S-curve), the
 raised hip tips up, the chest bounces twice per swing and the head tilts
 toward the raised hip.
 
-The bounce style is bouncing on the spot, feet on the ground: the body goes
-straight up and down with a quick dip and a rounder top, full from the hips up
-and fading to nothing at the feet, so the legs bend instead of her lifting
-off. The head rides it. The breasts hang on a damped spring driven by that
+The bounce style is a jump on the spot, driven from the hips: the body rises
+and falls on a jump's arc, hanging at the top and landing sharply, full from
+the hips up and fading to nothing at the feet, so the legs bend instead of her
+lifting off. The head rides it. The breasts hang on a damped spring driven by that
 motion, so they lag, snap after each dip and settle, vertically only, left and
 right slightly out of step. Nothing moves sideways.
 
@@ -75,18 +75,19 @@ FLAUNT_ORBIT = (0.22, 0.04)
 FLAUNT_PLANTED = 0.3
 
 # Bounce, in eye distances. One bounce takes BOUNCE_STEP seconds.
-BOUNCE_STEP = 1.25
-BOUNCE_BODY = 0.20           # body, straight up and down
-BOUNCE_HEAD_SHARE = 0.8      # of the body's travel, so the neck does not stretch
-# How sharp the dip is: 0 is a hard kink at the bottom, larger is rounder.
-BOUNCE_DIP = 0.15
+BOUNCE_STEP = 0.85
+BOUNCE_BODY = 0.35           # body, straight up and down
+BOUNCE_HEAD_SHARE = 0.9      # of the body's travel, so the neck does not stretch
+# How long the landing takes, as a fraction of a bounce. The arc itself has a
+# hard corner at the bottom; this rounds it just enough not to look clipped.
+BOUNCE_LANDING = 0.025
 # Visible feet do not move. When she is cropped above them the lowest row of
 # her still carries this much, since the knees are below the frame.
 BOUNCE_CROPPED_SHARE = 0.25
 # The breasts, on top of the body: how far, and the spring they hang on.
-BOUNCE_BUST = 0.34
-BOUNCE_SPRING_HZ = 2.4
-BOUNCE_SPRING_DAMPING = 0.25
+BOUNCE_BUST = 0.50
+BOUNCE_SPRING_HZ = 2.0
+BOUNCE_SPRING_DAMPING = 0.18
 BOUNCE_PAIR_OFFSET = 0.025   # left and right out of step, fraction of a bounce
 
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
@@ -453,21 +454,24 @@ _SPRING_TABLES: dict[tuple[int, float], tuple[np.ndarray, np.ndarray]] = {}
 def _bounce_tables(period: float) -> tuple[np.ndarray, np.ndarray]:
     """Body lift and breast offset over one bounce, sampled finely.
 
-    The body's lift is a rectified sine: a quick dip and a rounder top. The
-    breasts hang on a damped spring driven by it; their offset is the spring's
+    The body's lift is a jump's arc, a parabola per bounce: it hangs at the top
+    and lands sharply. The breasts hang on a damped spring driven by it; their offset is the spring's
     steady-state response, worked out per harmonic, so it repeats exactly every
-    bounce and the loop closes. The sharp dip is what excites the spring, which
-    is where the snap and the small settle come from.
+    bounce and the loop closes. The sharp landing is what excites the spring,
+    which is where the snap and the settle come from.
     """
     key = (512, round(period, 4))
     cached = _SPRING_TABLES.get(key)
     if cached is not None:
         return cached
     n = key[0]
-    theta = np.linspace(0.0, math.tau, n, endpoint=False)
-    half = np.sin(theta / 2.0)
-    lift = np.sqrt(half * half + BOUNCE_DIP ** 2) - BOUNCE_DIP
-    lift /= lift.max()
+    u = np.linspace(-1.0, 1.0, n, endpoint=False)
+    lift = 1.0 - u * u
+    # Round the landing with a short circular blur, then back to 0..1.
+    dist = np.minimum(np.arange(n), n - np.arange(n)).astype(np.float64)
+    k = np.exp(-0.5 * (dist / max(1e-6, BOUNCE_LANDING * n)) ** 2)
+    lift = np.real(np.fft.ifft(np.fft.fft(lift) * np.fft.fft(k / k.sum())))
+    lift = (lift - lift.min()) / (lift.max() - lift.min())
 
     w0 = math.tau * BOUNCE_SPRING_HZ
     zeta = BOUNCE_SPRING_DAMPING
