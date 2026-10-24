@@ -705,9 +705,9 @@ class ControlsPanel(QWidget):
         )
         self.bounce_button = SmallAction("Bounce", True)
         self.bounce_button.setToolTip(
-            "Portrait's rigid head with a slow chest motion: the bust traces a tall, narrow "
-            "oval, lifting and settling, while the shoulders rise slightly and the hips stay "
-            "still. A background stays still. Sets the loop to 5 seconds, two ovals. Not the "
+            "Her whole body moves in one slow, tall and narrow oval while her head and hair "
+            "stay calm, and her breasts follow it late, overshoot and settle, travelling "
+            "further than her body. A background stays still. Sets the loop to 5 seconds, two ovals. Not the "
             "same as the Bounce loop type below."
         )
         self.clear_depth_button = SmallAction("Clear")

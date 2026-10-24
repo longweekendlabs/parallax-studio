@@ -20,9 +20,12 @@ swing side to side while the shoulders lean against them (an S-curve), the
 raised hip tips up, the chest bounces twice per swing and the head tilts
 toward the raised hip.
 
-The bounce style is slow and mostly chest: the bust traces a squeezed oval,
-tall and narrow, with a soft settle after each lift; the shoulders rise a
-little ahead of it and the head rides them. Hips stay still.
+The bounce style moves her whole body in one slow, squeezed oval, tall and
+narrow, with the legs giving a little toward the feet. The head and hair ride
+it at a third of the travel, so they stay calm. The breasts follow the body
+late, overshoot and settle, the way soft tissue trails what carries it, so
+they travel well past the body; left and right are slightly out of step and
+spread a little sideways.
 
 Everything is driven by one depth map, a figure mask and a few points (head,
 neck pivot, chest, hips, eye distance). The points come from the pose model
@@ -73,12 +76,18 @@ FLAUNT_PLANTED = 0.3
 
 # Bounce, in eye distances. One oval takes BOUNCE_STEP seconds.
 BOUNCE_STEP = 2.5
-BOUNCE_LIFT = 0.18           # chest, up and down: the tall side of the oval
-BOUNCE_SIDE = 0.04           # chest, sideways: the narrow side
-BOUNCE_SETTLE = 0.03         # chest, the overtone after each lift
-BOUNCE_SHOULDERS = 0.035     # upper torso, rising a little ahead
-BOUNCE_HEAD = 0.02           # head, riding the shoulders
-BOUNCE_ORBIT = 0.10
+BOUNCE_BODY = (0.035, 0.12)  # whole body, sideways and up-down: the oval
+BOUNCE_HEAD_SHARE = 0.35     # how much of the body's travel the head carries
+BOUNCE_FEET_SHARE = 0.5      # and the feet, so she is not floating
+BOUNCE_ORBIT = 0.08
+# The breasts, on top of the body. They trail it by BOUNCE_LAG radians, then
+# overshoot and settle: the overtones are what a spring catching up looks
+# like, kept as whole harmonics so the loop still closes.
+BOUNCE_BUST_LIFT = 0.16
+BOUNCE_BUST_SIDE = 0.05
+BOUNCE_LAG = 0.9
+BOUNCE_SETTLE = ((0.35, 2.0), (0.15, 3.1))   # (share, extra lag) at 2x, 3x
+BOUNCE_PAIR_OFFSET = 0.18    # left and right breast out of step, radians
 
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
 # longest loop keeps the idle motion closest to the reference; flaunt reads
@@ -346,16 +355,23 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np
             tip=(tip_band * tip_side * m).astype(np.float32),
         )
     if rig.get("style") == BOUNCE:
-        # Wider than the breath, centred on the bust.
+        # What the body oval carries: all of the torso, less toward the feet,
+        # a share of it on the head block.
+        legs = 1.0 - (1.0 - BOUNCE_FEET_SHARE) * _smoothstep(iy + face, iy + face * 6.0, yy)
+        carry = (wh * BOUNCE_HEAD_SHARE + body * legs) * m
+        # One soft lobe per breast either side of the bust point.
         bust_at = rig.get("bust") or [rig["chest"][0], rig["chest"][1] + rig["face"] * 0.3]
         bx, by = bust_at[0] * sx, bust_at[1] * sy
-        bust = np.exp(
-            -(((xx - bx) / 3.0) ** 2 + ((yy - by) / 2.2) ** 2) / (face * face)
-        ) * body
-        upper = 1.0 - _smoothstep(cy, iy, yy)
+
+        def lobe(x0: float) -> np.ndarray:
+            return np.exp(
+                -(((xx - x0) / 1.4) ** 2 + ((yy - by) / 1.6) ** 2) / (face * face)
+            ) * body * m
+
         fields.update(
-            bust=(bust * m).astype(np.float32),
-            upper=(upper * body * m).astype(np.float32),
+            carry=carry.astype(np.float32),
+            bust_l=lobe(bx - face * 0.8).astype(np.float32),
+            bust_r=lobe(bx + face * 0.8).astype(np.float32),
         )
     with _CACHE_LOCK:
         _FIELDS[key] = fields
@@ -431,14 +447,21 @@ def _bounce(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndar
     cycles = max(1, int(round(duration / BOUNCE_STEP)))
     t = math.tau * cycles * phase
 
-    # Up is negative y. The lift leads, the settle trails it.
-    lift = face * (BOUNCE_LIFT * math.sin(t) + BOUNCE_SETTLE * math.sin(2 * t - 1.0))
-    side = face * BOUNCE_SIDE * math.cos(t)
-    shoulders = face * BOUNCE_SHOULDERS * math.sin(t + 0.4)
-    head = face * BOUNCE_HEAD * math.sin(t + 0.2)
-    wh = f["wh"]
-    dx = f["bust"] * side + f["rel_z"] * face * BOUNCE_ORBIT * math.cos(t)
-    dy = -(f["bust"] * lift) - f["upper"] * shoulders - wh * head
+    # The body's oval. Up is negative y.
+    body_x = face * BOUNCE_BODY[0] * math.cos(t)
+    body_y = -face * BOUNCE_BODY[1] * math.sin(t)
+    dx = f["carry"] * body_x + f["rel_z"] * face * BOUNCE_ORBIT * math.cos(t)
+    dy = f["carry"] * body_y
+
+    # Each breast trails the body, then overshoots and settles.
+    for lobe, sign in ((f["bust_l"], -1.0), (f["bust_r"], 1.0)):
+        u = t - BOUNCE_LAG + sign * BOUNCE_PAIR_OFFSET
+        lift = math.sin(u) + sum(
+            share * math.sin(n * u - lag) for n, (share, lag) in enumerate(BOUNCE_SETTLE, 2)
+        )
+        dy = dy - lobe * face * BOUNCE_BUST_LIFT * lift
+        # Sideways they follow the body, and spread apart a little as they lift.
+        dx = dx + lobe * face * BOUNCE_BUST_SIDE * (math.cos(u) + sign * 0.5 * math.sin(u))
     return dx, dy
 
 
