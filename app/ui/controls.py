@@ -705,10 +705,11 @@ class ControlsPanel(QWidget):
         )
         self.bounce_button = SmallAction("Bounce", True)
         self.bounce_button.setToolTip(
-            "Her whole body moves in one slow, tall and narrow oval while her head and hair "
-            "stay calm, and her breasts follow it late, overshoot and settle, travelling "
-            "further than her body. A background stays still. Sets the loop to 5 seconds, two ovals. Not the "
-            "same as the Bounce loop type below."
+            "Bouncing on the spot, feet on the ground: her body goes straight up and down "
+            "with a quick dip, her legs bend instead of her lifting off, her head rides it, "
+            "and her breasts follow on a spring, lagging, snapping after each dip and "
+            "settling. Nothing moves sideways. A background stays still. Sets the loop to "
+            "5 seconds, four bounces. Not the same as the Bounce loop type below."
         )
         self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")
