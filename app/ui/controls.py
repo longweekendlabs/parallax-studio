@@ -575,6 +575,7 @@ class ControlsPanel(QWidget):
     bodyReliefRequested = Signal()
     portraitRequested = Signal()
     flauntRequested = Signal()
+    bounceRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -702,6 +703,13 @@ class ControlsPanel(QWidget):
             "with each step and the head tilts toward the hip. A background stays still. "
             "Sets the loop to 4 seconds, two swings."
         )
+        self.bounce_button = SmallAction("Bounce", True)
+        self.bounce_button.setToolTip(
+            "Portrait's rigid head with a slow chest motion: the bust traces a tall, narrow "
+            "oval, lifting and settling, while the shoulders rise slightly and the hips stay "
+            "still. A background stays still. Sets the loop to 5 seconds, two ovals. Not the "
+            "same as the Bounce loop type below."
+        )
         self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")
         # Checkable purely so the button can show whether the map is currently
@@ -727,15 +735,16 @@ class ControlsPanel(QWidget):
         self.body_relief_button.clicked.connect(self.bodyReliefRequested.emit)
         self.portrait_button.clicked.connect(self.portraitRequested.emit)
         self.flaunt_button.clicked.connect(self.flauntRequested.emit)
-        # Six columns so the three depth generators share the top row and the
-        # three edits share the row below. A third row would put the scrollbar
-        # back.
-        buttons.addWidget(self.body_relief_button, 0, 0, 1, 2)
-        buttons.addWidget(self.portrait_button, 0, 2, 1, 2)
-        buttons.addWidget(self.flaunt_button, 0, 4, 1, 2)
-        buttons.addWidget(self.clear_depth_button, 1, 0, 1, 2)
-        buttons.addWidget(self.invert_depth_button, 1, 2, 1, 2)
-        buttons.addWidget(self.blur_depth_button, 1, 4, 1, 2)
+        self.bounce_button.clicked.connect(self.bounceRequested.emit)
+        # Six columns: the four motion generators in pairs, the three edits
+        # sharing the last row.
+        buttons.addWidget(self.body_relief_button, 0, 0, 1, 3)
+        buttons.addWidget(self.portrait_button, 0, 3, 1, 3)
+        buttons.addWidget(self.flaunt_button, 1, 0, 1, 3)
+        buttons.addWidget(self.bounce_button, 1, 3, 1, 3)
+        buttons.addWidget(self.clear_depth_button, 2, 0, 1, 2)
+        buttons.addWidget(self.invert_depth_button, 2, 2, 1, 2)
+        buttons.addWidget(self.blur_depth_button, 2, 4, 1, 2)
         depth.layout.addLayout(buttons)
         col.addWidget(depth)
 

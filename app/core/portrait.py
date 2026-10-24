@@ -20,6 +20,10 @@ swing side to side while the shoulders lean against them (an S-curve), the
 raised hip tips up, the chest bounces twice per swing and the head tilts
 toward the raised hip.
 
+The bounce style is slow and mostly chest: the bust traces a squeezed oval,
+tall and narrow, with a soft settle after each lift; the shoulders rise a
+little ahead of it and the head rides them. Hips stay still.
+
 Everything is driven by one depth map, a figure mask and a few points (head,
 neck pivot, chest, hips, eye distance). The points come from the pose model
 Body Relief already uses, so this adds no non-commercial model. The mask keeps
@@ -40,6 +44,7 @@ from app.core import depth_model
 
 IDLE = "idle"
 FLAUNT = "flaunt"
+BOUNCE = "bounce"
 
 # Thornline's numbers, in units of the eye distance ("face") and seconds.
 # Each entry is (amplitude, angular frequency rad/s, phase).
@@ -66,11 +71,21 @@ FLAUNT_ORBIT = (0.22, 0.04)
 # Knees and feet keep this much of the hip swing, so she is not skating.
 FLAUNT_PLANTED = 0.3
 
+# Bounce, in eye distances. One oval takes BOUNCE_STEP seconds.
+BOUNCE_STEP = 2.5
+BOUNCE_LIFT = 0.18           # chest, up and down: the tall side of the oval
+BOUNCE_SIDE = 0.04           # chest, sideways: the narrow side
+BOUNCE_SETTLE = 0.03         # chest, the overtone after each lift
+BOUNCE_SHOULDERS = 0.035     # upper torso, rising a little ahead
+BOUNCE_HEAD = 0.02           # head, riding the shoulders
+BOUNCE_ORBIT = 0.10
+
 # Loops in this app are 1-8 seconds, and the orbit's own period is 14s. The
 # longest loop keeps the idle motion closest to the reference; flaunt reads
 # best as two swings.
 PORTRAIT_DURATION = 8.0
 FLAUNT_DURATION = 4.0
+BOUNCE_DURATION = 5.0
 
 # The motion reads at its designed strength with the layer and global
 # intensity at their defaults (1.0 and 0.75).
@@ -199,6 +214,16 @@ def portrait_rig(rgb: np.ndarray, pose_id: str) -> dict | None:
         hips = (np.array(kp["left_hip"][:2], np.float32) + np.array(kp["right_hip"][:2], np.float32)) / 2
     else:
         hips = chest + down * span * 2.8
+    # The bust sits about 30% of the way from the shoulder line to the hips.
+    # Placed from the face alone it landed below and off-centre on two of
+    # eight test renders; from the shoulders it sat on the cleavage on all.
+    if "left_shoulder" in kp and "right_shoulder" in kp:
+        shoulders = (
+            np.array(kp["left_shoulder"][:2], np.float32) + np.array(kp["right_shoulder"][:2], np.float32)
+        ) / 2
+        bust = shoulders + (hips - shoulders) * 0.3
+    else:
+        bust = chest + down * span * 0.3
     height, width = rgb.shape[:2]
     point = lambda v: [float(v[0]), float(v[1])]
     return {
@@ -206,6 +231,7 @@ def portrait_rig(rgb: np.ndarray, pose_id: str) -> dict | None:
         "pivot": point(pivot),
         "chest": point(chest),
         "hips": point(hips),
+        "bust": point(bust),
         "face": float(span),
         "width": width,
         "height": height,
@@ -319,6 +345,18 @@ def _fields(layer_id: str, revision: int, depth: np.ndarray, rig: dict, mask: np
             lean=(lean * m).astype(np.float32),
             tip=(tip_band * tip_side * m).astype(np.float32),
         )
+    if rig.get("style") == BOUNCE:
+        # Wider than the breath, centred on the bust.
+        bust_at = rig.get("bust") or [rig["chest"][0], rig["chest"][1] + rig["face"] * 0.3]
+        bx, by = bust_at[0] * sx, bust_at[1] * sy
+        bust = np.exp(
+            -(((xx - bx) / 3.0) ** 2 + ((yy - by) / 2.2) ** 2) / (face * face)
+        ) * body
+        upper = 1.0 - _smoothstep(cy, iy, yy)
+        fields.update(
+            bust=(bust * m).astype(np.float32),
+            upper=(upper * body * m).astype(np.float32),
+        )
     with _CACHE_LOCK:
         _FIELDS[key] = fields
         while len(_FIELDS) > _MAX_CACHED:
@@ -388,6 +426,22 @@ def _flaunt(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndar
     return dx, dy
 
 
+def _bounce(f: dict, phase: float, duration: float) -> tuple[np.ndarray, np.ndarray]:
+    face = f["face"]
+    cycles = max(1, int(round(duration / BOUNCE_STEP)))
+    t = math.tau * cycles * phase
+
+    # Up is negative y. The lift leads, the settle trails it.
+    lift = face * (BOUNCE_LIFT * math.sin(t) + BOUNCE_SETTLE * math.sin(2 * t - 1.0))
+    side = face * BOUNCE_SIDE * math.cos(t)
+    shoulders = face * BOUNCE_SHOULDERS * math.sin(t + 0.4)
+    head = face * BOUNCE_HEAD * math.sin(t + 0.2)
+    wh = f["wh"]
+    dx = f["bust"] * side + f["rel_z"] * face * BOUNCE_ORBIT * math.cos(t)
+    dy = -(f["bust"] * lift) - f["upper"] * shoulders - wh * head
+    return dx, dy
+
+
 def source_maps(
     layer_id: str,
     revision: int,
@@ -404,6 +458,8 @@ def source_maps(
     f = _fields(layer_id, revision, depth, rig, mask)
     if rig.get("style") == FLAUNT:
         dx, dy = _flaunt(f, phase, duration)
+    elif rig.get("style") == BOUNCE:
+        dx, dy = _bounce(f, phase, duration)
     else:
         dx, dy = _idle(f, phase, duration)
     map_x = f["xx"] - dx * (amount * scale_x)
