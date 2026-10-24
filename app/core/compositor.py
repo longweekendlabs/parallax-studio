@@ -67,7 +67,10 @@ def composite_animated_layers(
     for layer in visible_layers:
         intensity = max(0.0, layer.intensity * global_intensity)
         if layer.portrait_rig:
-            frame = displace_portrait(layer, phase, intensity)
+            # The layer's own intensity only. The panel sends a global
+            # intensity of 1.0 against a layer default of 0.75, which made the
+            # first touch of any slider jump the figure motion by a third.
+            frame = displace_portrait(layer, phase, max(0.0, layer.intensity))
             _draw_layer(painter, layer, frame, width, height)
             continue
         dx, dy, zoom = motion_offset(

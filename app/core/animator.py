@@ -236,6 +236,7 @@ def displace_portrait(layer: Layer, phase: float, intensity: float) -> QImage:
     if depth.shape != (height, width):
         depth = cv2.resize(depth, (width, height), interpolation=cv2.INTER_LINEAR)
     amount = intensity * max(0.0, layer.movement_strength) / portrait.REFERENCE_INTENSITY
+    amount = min(amount, portrait.MAX_AMOUNT.get(layer.portrait_rig.get("style"), 1.0))
     map_x, map_y = portrait.source_maps(
         layer.id,
         layer.depth_revision,
@@ -247,6 +248,7 @@ def displace_portrait(layer: Layer, phase: float, intensity: float) -> QImage:
         max(0.0, min(1.0, layer.motion_scale_x)),
         max(0.0, min(1.0, layer.motion_scale_y)),
         layer.portrait_mask,
+        layer.portrait_hold,
     )
     displaced = cv2.remap(
         source,
