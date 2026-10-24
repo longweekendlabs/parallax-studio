@@ -67,6 +67,8 @@ def _cuda_can_render(layers: Sequence[Layer]) -> str:
             return f"layer '{layer.name}' is scaled"
         if layer.x_offset or layer.y_offset:
             return f"layer '{layer.name}' is offset"
+        if layer.portrait_rig:
+            return f"layer '{layer.name}' uses portrait motion"
     sizes = {(layer.image.width(), layer.image.height()) for layer in visible}
     if len(sizes) > 1:
         return "layers have differing sizes"

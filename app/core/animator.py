@@ -224,3 +224,34 @@ def displace_layer(layer: Layer, dx: float, dy: float, zoom: float = 0.0, depth_
         borderMode=cv2.BORDER_REPLICATE,
     )
     return rgba_to_qimage(displaced)
+
+
+def displace_portrait(layer: Layer, phase: float, intensity: float) -> QImage:
+    """One frame of the portrait motion (app/core/portrait.py)."""
+    from app.core import portrait
+
+    source = cached_rgba(layer.image)
+    height, width = source.shape[:2]
+    depth = ensure_depth_map(layer)
+    if depth.shape != (height, width):
+        depth = cv2.resize(depth, (width, height), interpolation=cv2.INTER_LINEAR)
+    amount = intensity * max(0.0, layer.movement_strength) / portrait.REFERENCE_INTENSITY
+    map_x, map_y = portrait.source_maps(
+        layer.id,
+        layer.depth_revision,
+        depth.astype(np.float32, copy=False),
+        layer.portrait_rig,
+        phase,
+        layer.duration,
+        amount,
+        max(0.0, min(1.0, layer.motion_scale_x)),
+        max(0.0, min(1.0, layer.motion_scale_y)),
+    )
+    displaced = cv2.remap(
+        source,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return rgba_to_qimage(displaced)

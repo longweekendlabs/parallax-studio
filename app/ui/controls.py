@@ -574,6 +574,7 @@ class ControlsPanel(QWidget):
     blurDepthRequested = Signal()
     autoDepthRequested = Signal()
     bodyReliefRequested = Signal()
+    portraitRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -690,6 +691,14 @@ class ControlsPanel(QWidget):
             "first time. Needs a mostly unobstructed person; falls back with a message if "
             "it cannot find one."
         )
+        self.portrait_button = SmallAction("Portrait", True)
+        self.portrait_button.setToolTip(
+            "For a single person, best on a cut-out portrait. Finds the face, then plays an "
+            "idle motion instead of the depth slide: the head turns and nods as one rigid "
+            "piece so the face never stretches, the body turns in depth around the head, "
+            "the hips sway and the chest breathes. Sets the loop to 8 seconds. Auto Depth "
+            "or Body Relief switch back to the normal motion."
+        )
         self.clear_depth_button = SmallAction("Clear")
         self.invert_depth_button = SmallAction("Invert")
         # Checkable purely so the button can show whether the map is currently
@@ -714,11 +723,13 @@ class ControlsPanel(QWidget):
         self.blur_depth_button.clicked.connect(self.blurDepthRequested.emit)
         self.auto_depth_button.clicked.connect(self.autoDepthRequested.emit)
         self.body_relief_button.clicked.connect(self.bodyReliefRequested.emit)
-        # Six columns so the two depth generators get half the width each and the
-        # three edits share the row below. A fifth button on the old 2x2 grid
-        # would have added a third row and put the scrollbar back.
-        buttons.addWidget(self.auto_depth_button, 0, 0, 1, 3)
-        buttons.addWidget(self.body_relief_button, 0, 3, 1, 3)
+        self.portrait_button.clicked.connect(self.portraitRequested.emit)
+        # Six columns so the three depth generators share the top row and the
+        # three edits share the row below. A third row would put the scrollbar
+        # back.
+        buttons.addWidget(self.auto_depth_button, 0, 0, 1, 2)
+        buttons.addWidget(self.body_relief_button, 0, 2, 1, 2)
+        buttons.addWidget(self.portrait_button, 0, 4, 1, 2)
         buttons.addWidget(self.clear_depth_button, 1, 0, 1, 2)
         buttons.addWidget(self.invert_depth_button, 1, 2, 1, 2)
         buttons.addWidget(self.blur_depth_button, 1, 4, 1, 2)

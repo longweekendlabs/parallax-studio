@@ -493,6 +493,7 @@ class MainWindow(QMainWindow):
         self.controls.blurDepthRequested.connect(self._blur_selected_depth)
         self.controls.autoDepthRequested.connect(lambda: self._auto_depth_selected(False))
         self.controls.bodyReliefRequested.connect(lambda: self._auto_depth_selected(True))
+        self.controls.portraitRequested.connect(self._portrait_selected)
         self._push_brush_preview()
         self.timeline.set_time(0.0, 0.0)
         self.top_bar.fps_selector.set_value(self.motion_settings.preview_fps, emit=False)
@@ -1596,6 +1597,7 @@ class MainWindow(QMainWindow):
             self.status_controller.warning("Select a layer before editing depth")
             return
         clear_depth(layer)
+        layer.portrait_rig = None
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self.status_controller.info(f"Cleared depth for {layer.name}")
@@ -1715,6 +1717,7 @@ class MainWindow(QMainWindow):
             push_depth_undo(layer)
             layer.depth_map = dialog.depth_map
             layer.depth_inverted = False
+            layer.portrait_rig = None
             touch_depth(layer)
             if relief:
                 from app.core.body_model import body_part_depth
@@ -1735,11 +1738,66 @@ class MainWindow(QMainWindow):
             return
         else:
             auto_depth(layer)
+            layer.portrait_rig = None
             source = "built-in heuristic"
 
         self._record_depth_action(layer)
         self._refresh_layers(refresh_panel=False)
         self.status_controller.info(f"Depth generated for {layer.name} using {source}")
+
+    def _portrait_selected(self):
+        """Depth and a head rig for the portrait motion (app/core/portrait.py)."""
+        from app.core.portrait import PORTRAIT_DURATION, PORTRAIT_POSE
+
+        layer = self._selected_layer()
+        if layer is None:
+            self.status_controller.warning("Select a layer before generating depth")
+            return
+        model_id = self.settings.depth_model
+        if not depth_model.get_model(model_id).filename or not depth_model.is_available():
+            self.status_controller.warning("Portrait needs a depth model. Pick one in Settings.")
+            return
+
+        dialog = DepthModelDialog(
+            layer.image, model_id, self, portrait=True, pose_id=PORTRAIT_POSE,
+        )
+        dialog.set_image(layer.image)
+        dialog.start()
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.depth_map is None:
+            self.status_controller.warning("Portrait did not run, so the layer is unchanged")
+            return
+        if dialog.rig is None:
+            self.status_controller.warning(
+                "Portrait found no face in this layer, so the layer is unchanged"
+            )
+            return
+
+        push_depth_undo(layer)
+        layer.depth_map = dialog.depth_map
+        layer.depth_inverted = False
+        layer.portrait_rig = dialog.rig
+        touch_depth(layer)
+        # The motion is designed at these: full strength on both axes and the
+        # longest loop, which is the closest this app gets to the reference's
+        # 14-second orbit.
+        layer.intensity = 1.0
+        layer.movement_strength = 1.0
+        layer.motion_scale_x = 1.0
+        layer.motion_scale_y = 1.0
+        layer.duration = PORTRAIT_DURATION
+        self.motion_settings = _dc.replace(
+            self.motion_settings,
+            layer_intensity=1.0,
+            movement_strength=1.0,
+            motion_scale_x=1.0,
+            motion_scale_y=1.0,
+            duration=PORTRAIT_DURATION,
+        )
+        self.controls.set_motion_settings(self.motion_settings)
+        self._record_depth_action(layer)
+        self._refresh_layers(refresh_panel=False)
+        self._request_preview_refresh()
+        self.status_controller.info(f"Portrait motion on {layer.name}")
 
     def closeEvent(self, event):
         size = self.size()
