@@ -14,6 +14,12 @@ Pillow==11.1.0
 imageio[ffmpeg]==2.37.0
 # imageio-ffmpeg provides the bundled encoder used for local builds.
 
+# Certificate bundle for the model downloads. A PyInstaller build ships its own
+# libssl, which looks for certificates where the build machine kept them; on a
+# system that files them elsewhere there is no store and every download fails
+# on verification before it starts. Carrying certifi removes that dependency.
+certifi==2025.1.31
+
 # AI depth estimation (Depth Anything V2 via ONNX). The model file itself is
 # downloaded on first use, not bundled.
 onnxruntime==1.28.0

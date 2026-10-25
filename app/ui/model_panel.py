@@ -10,6 +10,8 @@ sit and reported as shared, so the same weights are never downloaded twice.
 """
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -25,12 +27,15 @@ from app.ui.theme import (
     C_ACCENT,
     C_BORDER,
     C_BORDER_SOFT,
+    C_DANGER,
     C_PANEL_BG,
     C_TEXT_MAIN,
     C_TEXT_MUTED,
     C_TEXT_SECONDARY,
 )
 from app.utils.paths import models_dir
+
+logger = logging.getLogger(__name__)
 
 
 def catalogue() -> list[tuple[str, tuple]]:
@@ -91,16 +96,24 @@ class _Worker(QThread):
             for model in self._models:
                 if self._stop:
                     break
+                # ensure_file reports nothing until the first chunk arrives, and
+                # opening the connection can take seconds. Without this the
+                # window sits blank and there is no way to tell a slow connect
+                # from a dead button.
+                self.progress.emit(f"Connecting for {model.label}", 0, 0)
+                logger.info("Downloading %s from %s", model.filename, model.url)
                 depth_model.ensure_file(
                     model,
                     progress_cb=lambda d, t, m=model: self.progress.emit(m.label, d, t),
                     cancelled_cb=lambda: self._stop,
                 )
+                logger.info("Finished %s", model.filename)
                 self.one_done.emit(model.filename)
             self.finished_all.emit()
         except InterruptedError:
             self.finished_all.emit()
         except Exception as exc:  # network, disk, permissions
+            logger.exception("Download failed for %s", getattr(self, "_models", None))
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
@@ -113,6 +126,9 @@ class ModelPanel(QWidget):
         super().__init__(parent)
         self._rows: dict[str, QLabel] = {}
         self._worker: _Worker | None = None
+        # Survives refresh(), so an error stays on screen instead of being
+        # wiped by the next state update.
+        self._message = ""
         self._build()
         self.refresh()
 
@@ -217,10 +233,19 @@ class ModelPanel(QWidget):
         self.download_button.setEnabled(bool(pending))
         if pending:
             self.download_button.setText(f"Download {len(pending)} ({total:.0f} MB)")
-            self.status.setText("")
         else:
             self.download_button.setText("All installed")
-            self.status.setText("Everything is present. Auto Depth and Body Relief are ready.")
+        # Never clear the message here. This used to blank it unconditionally,
+        # and _on_failed sets the message and then calls refresh, so every
+        # download error was erased in the same breath it was written: the
+        # button re-enabled, the progress bar vanished, and a failure looked
+        # exactly like a button that did nothing at all.
+        if self._message:
+            self.status.setText(self._message)
+        elif not pending:
+            self.status.setText("Everything is present. Auto Depth, Portrait, Flaunt and Bounce are ready.")
+        else:
+            self.status.setText("")
         self.changed.emit()
 
     # ── download ────────────────────────────────────────────────────────────
@@ -229,7 +254,14 @@ class ModelPanel(QWidget):
         pending = missing_models()
         if not pending or self.is_busy():
             return
+        self._message = ""
+        self.status.setStyleSheet(
+            f"font-size: 11px; color: {C_TEXT_SECONDARY}; background: transparent;"
+        )
         self.download_button.setEnabled(False)
+        self.download_button.setText("Downloading...")
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Connecting...")
         self.progress.setVisible(True)
         self._worker = _Worker(pending)
         self._worker.progress.connect(self._on_progress)
@@ -264,7 +296,11 @@ class ModelPanel(QWidget):
         self.refresh()
 
     def _on_failed(self, message: str):
+        logger.error("Model download failed: %s", message)
         self.progress.setVisible(False)
         self._worker = None
-        self.status.setText(f"Download failed: {message}")
+        self._message = f"Download failed. {message}"
         self.refresh()
+        self.status.setStyleSheet(
+            f"font-size: 11px; color: {C_DANGER}; background: transparent;"
+        )

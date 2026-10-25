@@ -1,6 +1,7 @@
 # Build and environment output.
 .venv/
 .venv-linux*/
+.venv-build*/
 __pycache__/
 *.pyc
 *.pyo
