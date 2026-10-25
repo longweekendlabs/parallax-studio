@@ -41,7 +41,17 @@ if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(not ((3, 11) <= sys.version_
     exit 1
 fi
 
-VENV_DIR="${VENV_DIR:-.venv-linux-$PY_TAG}"
+# A venv of its own, not the one used for development.
+#
+# PyInstaller bundles whatever it finds installed, so building out of the
+# development venv ships every extra that has ever been pip installed into it.
+# Installing onnxruntime-gpu there for CUDA during development put 1.7GB of
+# CUDA runtime into the bundle -- libcublasLt alone was 715MB -- and took the
+# RPM from 140MB to 1.01GB, which is exactly what requirements.txt says must
+# never be bundled. This venv is built from requirements.txt and nothing else,
+# so the shipped app is reproducible and the development venv is free to carry
+# whatever it likes.
+VENV_DIR="${VENV_DIR:-.venv-build-$PY_TAG}"
 
 if [[ ! -d "$VENV_DIR" ]]; then
     echo "> Creating virtual environment: $VENV_DIR"

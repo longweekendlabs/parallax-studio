@@ -168,6 +168,45 @@ def _extra_model_dirs() -> tuple[Path, ...]:
     return tuple(unique)
 
 
+def _ssl_context():
+    """A TLS context with a certificate store that exists.
+
+    A PyInstaller build ships its own libssl, and that copy looks for
+    certificates wherever the machine it was built on kept them. On a system
+    that files them somewhere else there is no store at all, every HTTPS
+    request fails on verification the moment it is made, and a download that
+    never starts is indistinguishable from a button that does nothing.
+
+    certifi's bundle is used when it is installed, which is what a packaged
+    build should carry. Otherwise fall back to whatever the system offers,
+    which is correct when running from source.
+    """
+    import ssl
+
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+
+    context = ssl.create_default_context()
+    paths = ssl.get_default_verify_paths()
+    if not (paths.cafile or paths.capath):
+        # Nothing configured at all: try the usual locations before giving up,
+        # so the failure that reaches the user is a real one and not this.
+        for candidate in ("/etc/pki/tls/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+            if Path(candidate).is_file():
+                context.load_verify_locations(cafile=candidate)
+                break
+        else:
+            for candidate in ("/etc/pki/tls/certs", "/etc/ssl/certs"):
+                if Path(candidate).is_dir():
+                    context.load_verify_locations(capath=candidate)
+                    break
+    return context
+
+
 def _complete(path: Path, model: DepthModel) -> bool:
     # A partial file from an interrupted download would load as a corrupt model.
     return path.is_file() and path.stat().st_size >= model.approx_bytes * 0.95
@@ -221,7 +260,7 @@ def ensure_file(
 
     request = urllib.request.Request(model.url, headers={"User-Agent": "ParallaxStudio"})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30, context=_ssl_context()) as response:
             total = int(response.headers.get("Content-Length") or model.approx_bytes)
             done = 0
             with open(partial, "wb") as handle:
