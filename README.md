@@ -16,15 +16,21 @@ Point it at a photo or a piece of layered art, press one button, and it works ou
 
 ## Depth without painting
 
-Two buttons generate depth for you.
+**Auto Depth** runs Depth Anything V2 and separates a subject from its background properly. The result is feathered where it needs to be: a hard silhouette does not stretch under displacement, it tears, and the sampling grid folds back over itself along the outline. Feathering is what stops that. It works on anything: landscapes, rooms, objects, people.
 
-**Auto Depth** runs Depth Anything V2 and separates a subject from its background properly. The result is feathered where it needs to be: a hard silhouette does not stretch under displacement, it tears, and the sampling grid folds back over itself along the outline. Feathering is what stops that.
+![Parallax Studio with a dusk landscape, its Auto Depth map shown as a colour overlay from blue sky to red foreground](docs/assets/parallax-studio-ui.png)
 
-**Body Relief** is for photographs of people. It finds every figure in the frame and its pose, then rebuilds the depth *inside* each one, so chest, waist, hips, arms and legs each carry their own parallax instead of the whole figure sliding about as a single cutout. It touches the subject only, leaving backgrounds and faces exactly as Auto Depth had them.
+## People move like people, not like cutouts
 
-![Body Relief separating the chest, arms and legs of a person into distinct visible depth regions](docs/screenshots/body-relief.png)
+A picture of one person gets three motions of its own. Each finds the face first and moves the head and hair as one rigid piece, a turn and a shift but never a stretch, so the face stays exactly the face. The background stays still, whether the picture is a cut-out with transparency or a full scene.
 
-![The Parallax Studio window](docs/assets/parallax-studio-ui.png)
+**Portrait** is an idle loop. The head tilts and nods, the body turns slowly in depth around it, the hips sway and the chest lifts with each breath. Eight seconds a loop.
+
+**Flaunt** swings the hips side to side while the shoulders lean the other way, tips the raised hip up and tilts the head toward it, with the chest moving on each step. Two swings in four seconds.
+
+**Bounce** is a bounce on the spot with the feet on the ground. The body rises and falls, the legs bend instead of lifting off, and the chest follows a beat behind and travels further. Four bounces in six seconds.
+
+Intensity, path and duration still tune them. Erase holds any area still while the rest moves, and Paint lets it move again.
 
 ## Or paint it yourself
 
@@ -34,7 +40,7 @@ A depth brush with size, hardness, strength and depth value, over a colour-rampe
 
 ## Motion you can judge before you commit
 
-Focus, path, zoom, loop type, duration and intensity. The preview plays at 24, 30 or 60 fps and reports the rate it is really achieving, so what you judge is what you get. Body Relief also sets the motion controls to suit the depth it just generated, worked out from the scene rather than fixed defaults.
+Focus, path, zoom, loop type, duration and intensity. The preview plays at 24, 30 or 60 fps and reports the rate it is really achieving, so what you judge is what you get. Controls a motion does not use are dimmed while it is on, so a slider never sits there doing nothing.
 
 ## Export that uses your hardware
 
@@ -42,18 +48,14 @@ MP4 or GIF, at whatever resolution and frame rate you pick. On an NVIDIA machine
 
 ## The models run offline and stay out of your way
 
-Downloaded on first use and kept afterwards, around 70 MB in total. All Apache-2.0, so nothing here restricts what you do with the output.
+Downloaded on first use and kept afterwards, around 75 MB in total. All Apache-2.0, so nothing here restricts what you do with the output.
 
 | Model | Size | Job |
 |---|---|---|
-| Depth Anything V2 Small | 50 MB | Auto Depth. Default |
-| Depth Anything V2 Small, full precision | 99 MB | Auto Depth, when the half-precision build shows banding |
-| MediaPipe Selfie Segmentation | 0.5 MB | Finding the subject |
-| MoveNet MultiPose | 19 MB | Up to six figures. Default |
-| MoveNet Thunder | 25 MB | One figure, more precise joints |
-| MoveNet Lightning | 9 MB | One figure, fastest |
-
-The pose model is selectable in Settings, as is how far Body Relief separates the parts.
+| Depth Anything V2 Small | 50 MB | Depth for every motion. Default |
+| Depth Anything V2 Small, full precision | 99 MB | The same, when the half-precision build shows banding |
+| MediaPipe Selfie Segmentation | 0.5 MB | Finding the person, so the background stays still |
+| MoveNet Thunder | 25 MB | Finding the face, shoulders and hips |
 
 A larger Depth Anything V2 Base, 389 MB, is offered as well, but it is CC-BY-NC-4.0 and labelled as such in the app: do not use its output commercially.
 
