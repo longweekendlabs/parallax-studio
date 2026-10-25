@@ -4,6 +4,12 @@ All notable changes to Parallax Studio. Newest first.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-25
+
+### Fixed
+
+- The Linux RPM of 0.10.0 did not start: it could not load numpy. Packaging stripped every bundled library, and the older strip on the build machine left two empty segments in numpy's OpenBLAS at file offsets that are not page-aligned, which newer systems refuse to load. The RPM now ships the libraries exactly as built, and the build fails if any of them change. The DEB, the tarball, Windows and macOS were not affected.
+
 ## [0.10.0] - 2026-10-25
 
 ### Added

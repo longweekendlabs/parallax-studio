@@ -62,5 +62,27 @@ SKIP_APP_BUILD=1 bash "$ROOT/build_rpm.sh" >/dev/null
 # sweeping the whole directory would attach all of them to the release.
 find "$ROOT/dist/rpm" -name "${NAME}-${VERSION}-*.rpm" -exec cp {} "$OUT/" \;
 
+# The RPM must carry the build byte for byte. If rpmbuild rewrites any shared
+# library (stripping did once, and broke the app), fail here instead of
+# publishing a package that will not start.
+CHECK="$ROOT/build/rpm-check"
+rm -rf "$CHECK"; mkdir -p "$CHECK"
+RPM_FILE="$(find "$OUT" -name "${NAME}-${VERSION}-*.rpm" | head -n 1)"
+(cd "$CHECK" && rpm2cpio "$RPM_FILE" | cpio -idm --quiet)
+changed=0
+while IFS= read -r -d '' lib; do
+  rel="${lib#"$ROOT/dist/$NAME/"}"
+  if ! cmp -s "$lib" "$CHECK/opt/$NAME/$rel"; then
+    echo "x  $rel differs between the build and the RPM"
+    changed=1
+  fi
+done < <(find "$ROOT/dist/$NAME" -name '*.so*' -type f -print0)
+rm -rf "$CHECK"
+if [[ "$changed" != 0 ]]; then
+  echo "The RPM altered shared libraries; refusing to publish it."
+  exit 1
+fi
+echo "RPM libraries match the build."
+
 echo "Packaged into $OUT:"
 ls -lh "$OUT"

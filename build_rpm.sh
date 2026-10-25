@@ -60,6 +60,14 @@ cat > "$SPEC_FILE" <<EOF
 %global debug_package %{nil}
 %global _build_id_links none
 %global __debug_install_post %{nil}
+# Ship the prebuilt files exactly as PyInstaller made them. The default
+# post-install step strips every shared library, and Ubuntu 22.04's strip
+# (binutils 2.38) left two empty LOAD segments in numpy's OpenBLAS at file
+# offsets that are not page-aligned. Newer glibc refuses to load that, so the
+# v0.10.0 RPM built in CI could not import numpy and did not start, while
+# Fedora's newer strip happened to produce a working file locally.
+%global __os_install_post %{nil}
+%global __strip /bin/true
 
 Name:           parallax-studio
 Version:        $VERSION
