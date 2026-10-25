@@ -20,13 +20,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from app.core import body_model, depth_model, face_parser
+from app.core import depth_model
 from app.core.exporter import is_cuda_available, is_nvenc_available
 from app.ui.model_panel import ModelPanel
 from app.ui.theme import (
@@ -127,32 +126,6 @@ class _NavRow(QPushButton):
         )
 
 
-class _WeightRow(QWidget):
-    """A 0..100% share, shown as a slider with its own readout."""
-
-    def __init__(self, value: float):
-        super().__init__()
-        self.setStyleSheet("background: transparent;")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 100)
-        self.slider.setValue(max(0, min(100, int(round(value * 100)))))
-        self.readout = QLabel(f"{self.slider.value()}%")
-        self.readout.setFixedWidth(36)
-        self.readout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.readout.setStyleSheet(
-            f"color: {C_TEXT_MAIN}; font-size: 11.5px; background: transparent;"
-        )
-        self.slider.valueChanged.connect(lambda v: self.readout.setText(f"{v}%"))
-        row.addWidget(self.slider, 1)
-        row.addWidget(self.readout)
-
-    def value(self) -> float:
-        return self.slider.value() / 100.0
-
-
 class SettingsDialog(QDialog):
     def __init__(self, settings: AppSettings, parent=None, page: str = "depth"):
         super().__init__(parent)
@@ -209,7 +182,6 @@ class SettingsDialog(QDialog):
         outer.addLayout(body, 1)
 
         self._add_page("depth", self._depth_page())
-        self._add_page("relief", self._relief_page())
         self._add_page("models", self._models_page())
         self._add_page("hardware", self._hardware_page())
 
@@ -235,7 +207,6 @@ class SettingsDialog(QDialog):
         lay.addWidget(_caption("Depth"))
         lay.addSpacing(2)
         add("depth", "Auto Depth")
-        add("relief", "Body Relief")
         lay.addSpacing(14)
         lay.addWidget(_caption("System"))
         lay.addSpacing(2)
@@ -309,88 +280,6 @@ class SettingsDialog(QDialog):
         lay.addStretch()
         return page
 
-    def _relief_page(self) -> QWidget:
-        page, lay = self._page("Body Relief")
-
-        self.pose_combo = QComboBox()
-        for spec in body_model.POSE_SPECS.values():
-            suffix = "" if depth_model.has_file(spec.model) else "  (not downloaded)"
-            self.pose_combo.addItem(spec.model.label + suffix, spec.model.id)
-        index = self.pose_combo.findData(self._settings.pose_model)
-        self.pose_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.pose_combo.setEnabled(depth_model.is_available())
-        lay.addWidget(_row(
-            "Pose model",
-            "Finds where a figure's joints are, which is what places the parts.",
-            self.pose_combo, 260,
-        ))
-
-        strength = QWidget()
-        strength.setStyleSheet("background: transparent;")
-        srow = QHBoxLayout(strength)
-        srow.setContentsMargins(0, 0, 0, 0)
-        srow.setSpacing(8)
-        self.relief_slider = QSlider(Qt.Orientation.Horizontal)
-        self.relief_slider.setRange(2, 20)
-        self.relief_slider.setValue(
-            max(2, min(20, int(round(self._settings.body_relief_strength * 10))))
-        )
-        self.relief_value = QLabel(f"{self.relief_slider.value() / 10:.1f}")
-        self.relief_value.setFixedWidth(36)
-        self.relief_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.relief_value.setStyleSheet(
-            f"color: {C_TEXT_MAIN}; font-size: 11.5px; background: transparent;"
-        )
-        self.relief_slider.valueChanged.connect(
-            lambda v: self.relief_value.setText(f"{v / 10:.1f}")
-        )
-        srow.addWidget(self.relief_slider, 1)
-        srow.addWidget(self.relief_value)
-        lay.addWidget(_row(
-            "Separation",
-            "How far apart chest, waist and hips are pushed. The picture scales "
-            "this by how much of the frame the figure fills.",
-            strength,
-        ))
-
-        lay.addWidget(_rule())
-        lay.addWidget(_caption("What moves"))
-
-        self.face_row = _WeightRow(self._settings.relief_face)
-        self.hair_row = _WeightRow(self._settings.relief_hair)
-        self.body_row = _WeightRow(self._settings.relief_body)
-        self.background_row = _WeightRow(self._settings.relief_background)
-        lay.addWidget(_row(
-            "Face", "Leave at zero. A displaced face pulls its features apart.",
-            self.face_row,
-        ))
-        lay.addWidget(_row(
-            "Hair", "Hair against a still face is the clearest read of bounce.",
-            self.hair_row,
-        ))
-        lay.addWidget(_row(
-            "Body", "Chest, waist, hips, arms and legs.", self.body_row,
-        ))
-        lay.addWidget(_row(
-            "Background",
-            "Deepens the scene rather than dragging it with the figure. Off by default.",
-            self.background_row,
-        ))
-
-        if not depth_model.has_file(face_parser.FACE_PARSER):
-            warn = QLabel(
-                "Face and hair are told apart by a parser that is not installed. "
-                "Until it is, the whole head is held still and those two do nothing."
-            )
-            warn.setWordWrap(True)
-            warn.setStyleSheet(
-                f"font-size: 11px; color: {C_TEXT_SECONDARY}; background: transparent;"
-            )
-            lay.addWidget(warn)
-
-        lay.addStretch()
-        return page
-
     def _models_page(self) -> QWidget:
         page, lay = self._page("Models")
         self.model_panel = ModelPanel()
@@ -432,10 +321,10 @@ class SettingsDialog(QDialog):
 
             available = list(ort.get_available_providers())
         except Exception:
-            return "ONNX Runtime is not installed, so Auto Depth, Body Relief, Portrait, Flaunt and Bounce are unavailable."
+            return "ONNX Runtime is not installed, so Auto Depth, Portrait, Flaunt and Bounce are unavailable."
         if "CUDAExecutionProvider" in available:
             return (
-                "Running on CUDA. Auto Depth, Body Relief and the figure motions use the GPU, which "
+                "Running on CUDA. Auto Depth and the figure motions use the GPU, which "
                 "is roughly twice as fast as the CPU on this machine."
             )
         return (
@@ -478,11 +367,4 @@ class SettingsDialog(QDialog):
             self._settings.gpu_encode = self.gpu_encode_check.isChecked()
         if self.model_combo.isEnabled():
             self._settings.depth_model = self.model_combo.currentData()
-        if self.pose_combo.isEnabled():
-            self._settings.pose_model = self.pose_combo.currentData()
-        self._settings.body_relief_strength = self.relief_slider.value() / 10.0
-        self._settings.relief_face = self.face_row.value()
-        self._settings.relief_hair = self.hair_row.value()
-        self._settings.relief_body = self.body_row.value()
-        self._settings.relief_background = self.background_row.value()
         return self._settings

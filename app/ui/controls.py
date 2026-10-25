@@ -574,7 +574,6 @@ class ControlsPanel(QWidget):
     invertDepthRequested = Signal()
     blurDepthRequested = Signal()
     autoDepthRequested = Signal()
-    bodyReliefRequested = Signal()
     portraitRequested = Signal()
     flauntRequested = Signal()
     bounceRequested = Signal()
@@ -692,21 +691,13 @@ class ControlsPanel(QWidget):
         self.auto_depth_button.setToolTip(
             "Generate a starter depth map from the selected image. This is editable and undoable, not final AI depth."
         )
-        self.body_relief_button = SmallAction("Body Relief", True)
-        self.body_relief_button.setToolTip(
-            "For photos of people. Finds the figure and its pose, then rebuilds the depth "
-            "inside it so chest, waist, hips, knees and arms each carry their own parallax "
-            "instead of the figure sliding as one cutout. Downloads two small models the "
-            "first time. Needs a mostly unobstructed person; falls back with a message if "
-            "it cannot find one."
-        )
         self.portrait_button = SmallAction("Portrait", True)
         self.portrait_button.setToolTip(
             "For a single person, best on a cut-out portrait. Finds the face, then plays an "
             "idle motion instead of the depth slide: the head turns and nods as one rigid "
             "piece so the face never stretches, the body turns in depth around the head, "
             "the hips sway and the chest breathes. A background stays still. Sets the loop "
-            "to 8 seconds. Auto Depth, Body Relief or Clear switch back to the normal motion."
+            "to 8 seconds. Auto Depth or Clear switch back to the normal motion."
         )
         self.flaunt_button = SmallAction("Flaunt", True)
         self.flaunt_button.setToolTip(
@@ -746,17 +737,15 @@ class ControlsPanel(QWidget):
         self.invert_depth_button.clicked.connect(self.invertDepthRequested.emit)
         self.blur_depth_button.clicked.connect(self.blurDepthRequested.emit)
         self.auto_depth_button.clicked.connect(self.autoDepthRequested.emit)
-        self.body_relief_button.clicked.connect(self.bodyReliefRequested.emit)
         self.portrait_button.clicked.connect(self.portraitRequested.emit)
         self.flaunt_button.clicked.connect(self.flauntRequested.emit)
         self.bounce_button.clicked.connect(self.bounceRequested.emit)
-        # Six columns: the two depth generators share the top row as before,
-        # the three figure motions the next, the three edits the last.
+        # Six columns: the four motions in pairs, the three edits sharing the
+        # last row.
         buttons.addWidget(self.auto_depth_button, 0, 0, 1, 3)
-        buttons.addWidget(self.body_relief_button, 0, 3, 1, 3)
-        buttons.addWidget(self.portrait_button, 1, 0, 1, 2)
-        buttons.addWidget(self.flaunt_button, 1, 2, 1, 2)
-        buttons.addWidget(self.bounce_button, 1, 4, 1, 2)
+        buttons.addWidget(self.portrait_button, 0, 3, 1, 3)
+        buttons.addWidget(self.flaunt_button, 1, 0, 1, 3)
+        buttons.addWidget(self.bounce_button, 1, 3, 1, 3)
         buttons.addWidget(self.clear_depth_button, 2, 0, 1, 2)
         buttons.addWidget(self.invert_depth_button, 2, 2, 1, 2)
         buttons.addWidget(self.blur_depth_button, 2, 4, 1, 2)
