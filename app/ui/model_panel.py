@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core import body_model, depth_model, face_parser
+from app.core import body_model, depth_model
 from app.ui.theme import (
     C_ACCENT,
     C_BORDER,
@@ -42,8 +42,9 @@ def catalogue() -> list[tuple[str, tuple]]:
     """Every model the app can use, grouped by what it is for."""
     return [
         ("Depth", tuple(m for m in depth_model.MODELS if m.filename)),
-        ("Body Relief", (body_model.SEGMENT_MODEL,) + body_model.POSE_MODELS),
-        ("Face and hair", (face_parser.FACE_PARSER,)),
+        # Portrait, Flaunt and Bounce: the figure mask and the face and pose
+        # points. They always read the rig from Thunder (portrait.PORTRAIT_POSE).
+        ("Figure motions", (body_model.SEGMENT_MODEL, body_model.POSE_THUNDER)),
     ]
 
 
@@ -62,7 +63,7 @@ def missing_models() -> list:
 
 
 def essential_missing(settings) -> list:
-    """The models the two depth buttons actually need to work.
+    """The models the depth and figure-motion buttons actually need to work.
 
     The alternative depth checkpoints are choices, not requirements, so
     nagging about them on every launch would only train the prompt to be
@@ -71,8 +72,7 @@ def essential_missing(settings) -> list:
     needed = (
         depth_model.get_model(getattr(settings, "depth_model", "")),
         body_model.SEGMENT_MODEL,
-        body_model.pose_spec(getattr(settings, "pose_model", body_model.DEFAULT_POSE)).model,
-        face_parser.FACE_PARSER,
+        body_model.POSE_THUNDER,
     )
     return [m for m in needed if m.filename and not depth_model.has_file(m)]
 
